@@ -3,6 +3,8 @@ Token-based authentication for Chelon
 """
 
 import os
+import sys
+import stat
 import json
 import logging
 import hashlib

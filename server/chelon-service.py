@@ -86,6 +86,12 @@ def _handle_signing(operation):
     
     token = auth_header.split(' ', 1)[1]
     
+    # Extract token_id from token string before validation for audit logging
+    # Token format is "token_id:secret"
+    token_id = None
+    if token and ':' in token:
+        token_id = token.split(':', 1)[0]
+    
     try:
         token_info = token_auth.validate_token(token)
     except ValueError as e:
