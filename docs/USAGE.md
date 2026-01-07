@@ -25,14 +25,14 @@ Chelon provides three ways to sign packages:
 sudo dnf install chelon-client
 
 # Configure environment
-export CHELON_URL="https://gamera.atomicorp.com:5050"
+export CHELON_URL="https://gamera:5050"
 export CHELON_TOKEN="your-token-id:secret"
 export CHELON_CERT_DIR="$HOME/.chelon/certs"
 
 # Copy client certificates
 mkdir -p ~/.chelon/certs
-scp root@gamera:/etc/chelon/certs/chelon_client.* ~/.chelon/certs/
-scp root@gamera:/etc/chelon/certs/chelon_ca.crt ~/.chelon/certs/
+scp /etc/chelon/certs/chelon_client.* ~/.chelon/certs/
+scp /etc/chelon/certs/chelon_ca.crt ~/.chelon/certs/
 ```
 
 ### Sign an RPM
@@ -54,7 +54,7 @@ done
 ```
 === Signing RPM with Chelon ===
 RPM: package.rpm
-Chelon: https://gamera.atomicorp.com:5050
+Chelon: https://gamera:5050
 
 Reading RPM file...
 RPM size: 1234567 bytes
@@ -82,7 +82,7 @@ chelon-sign-repomd --key-type modern repodata/repomd.xml
 ```
 === Signing Repository Metadata ===
 File: repodata/repomd.xml
-Chelon: https://gamera.atomicorp.com:5050
+Chelon: https://gamera:5050
 
 Reading metadata file...
 File size: 12345 bytes
@@ -106,7 +106,7 @@ from chelon_client import ChelonClient
 
 # Initialize client
 client = ChelonClient(
-    url="https://gamera.atomicorp.com:5050",
+    url="https://gamera:5050",
     token="your-token-id:secret",
     cert_dir="/path/to/certs"
 )
@@ -163,7 +163,7 @@ except ChelonClientError as e:
 RPM_DATA=$(base64 -w0 package.rpm)
 
 # Call API
-curl -k -X POST https://gamera.atomicorp.com:5050/api/v1/sign/rpm \
+curl -k -X POST https://gamera:5050/api/v1/sign/rpm \
   --cert ~/.chelon/certs/chelon_client.crt \
   --key ~/.chelon/certs/chelon_client.key \
   --cacert ~/.chelon/certs/chelon_ca.crt \
@@ -182,7 +182,7 @@ curl -k -X POST https://gamera.atomicorp.com:5050/api/v1/sign/rpm \
 REPOMD_DATA=$(base64 -w0 repodata/repomd.xml)
 
 # Call API
-curl -k -X POST https://gamera.atomicorp.com:5050/api/v1/sign/repodata \
+curl -k -X POST https://gamera:5050/api/v1/sign/repodata \
   --cert ~/.chelon/certs/chelon_client.crt \
   --key ~/.chelon/certs/chelon_client.key \
   --cacert ~/.chelon/certs/chelon_ca.crt \
@@ -216,7 +216,7 @@ curl -k -X POST https://gamera.atomicorp.com:5050/api/v1/sign/repodata \
 sign_packages:
   stage: sign
   script:
-    - export CHELON_URL="https://gamera.atomicorp.com:5050"
+    - export CHELON_URL="https://gamera:5050"
     - export CHELON_TOKEN="$CHELON_TOKEN"  # From CI/CD secrets
     - export CHELON_CERT_DIR="/builds/.chelon/certs"
     
@@ -251,7 +251,7 @@ sign: $(RPMS)
 #!/bin/bash
 set -e
 
-CHELON_URL="${CHELON_URL:-https://gamera.atomicorp.com:5050}"
+CHELON_URL="${CHELON_URL:-https://gamera:5050}"
 CHELON_TOKEN="${CHELON_TOKEN:?CHELON_TOKEN not set}"
 
 # Sign all RPMs in directory
@@ -277,7 +277,7 @@ echo "All packages signed successfully"
 
 ```bash
 # List configured keys
-curl -k https://gamera.atomicorp.com:5050/api/v1/keys
+curl -k https://gamera:5050/api/v1/keys
 ```
 
 **Response:**
@@ -355,7 +355,7 @@ HTTP 401: Invalid token
 echo $CHELON_TOKEN
 
 # Verify token exists on server
-ssh root@gamera "sudo chelon-admin list-tokens"
+sudo chelon-admin list-tokens
 ```
 
 ### Certificate Errors
@@ -391,10 +391,10 @@ Failed to connect to gamera.atomicorp.com port 5050
 **Solution:**
 ```bash
 # Check if service is running
-ssh root@gamera "sudo systemctl status chelon"
+sudo systemctl status chelon
 
 # Check firewall
-ssh root@gamera "sudo firewall-cmd --list-all | grep 5050"
+sudo firewall-cmd --list-all | grep 5050
 ```
 
 ---
