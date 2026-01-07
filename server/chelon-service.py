@@ -223,9 +223,45 @@ def _handle_signing(operation):
 
     # Validate key_type parameter
     key_type = data.get('key_type', 'legacy')
-    if key_type not in ['legacy', 'modern']:
-        logger.warning(f"[{request_id}] Invalid key_type: {key_type}")
-        return jsonify({'error': f'Invalid key_type: {key_type}. Must be "legacy" or "modern"', 'request_id': request_id}), 400
+
+    # Prefer dynamic key validation based on signing_engine configuration, with
+    # a fallback to legacy/modern-only validation for backward compatibility.
+    available_keys = None
+
+    # Try common patterns for exposing configured keys on signing_engine.
+    keys_attr = getattr(signing_engine, "keys", None)
+    if keys_attr is not None:
+        if isinstance(keys_attr, dict):
+            available_keys = list(keys_attr.keys())
+        elif isinstance(keys_attr, (list, tuple, set)):
+            available_keys = list(keys_attr)
+
+    # Optionally support a method-based API if present.
+    if not available_keys and hasattr(signing_engine, "get_available_keys"):
+        try:
+            dynamic_keys = signing_engine.get_available_keys()
+            if dynamic_keys:
+                available_keys = list(dynamic_keys)
+        except Exception:
+            # If the engine does not support this call or it fails, we will
+            # fall back to the static legacy/modern validation below.
+            available_keys = None
+
+    if available_keys:
+        if key_type not in available_keys:
+            logger.warning(f"[{request_id}] Invalid key_type: {key_type}")
+            return jsonify({
+                'error': f'Invalid key_type: {key_type}. Must be one of: {", ".join(sorted(available_keys))}',
+                'request_id': request_id
+            }), 400
+    else:
+        # Fallback for older configurations where only legacy/modern are valid.
+        if key_type not in ['legacy', 'modern']:
+            logger.warning(f"[{request_id}] Invalid key_type: {key_type}")
+            return jsonify({
+                'error': f'Invalid key_type: {key_type}. Must be "legacy" or "modern"',
+                'request_id': request_id
+            }), 400
     
     sign_target = None
     data_id = None
