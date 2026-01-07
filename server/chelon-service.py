@@ -6,7 +6,10 @@ Flask API for signing RPM packages and repository metadata
 import os
 import sys
 import json
+import uuid
+import time
 import logging
+import hashlib
 from datetime import datetime, UTC
 from flask import Flask, request, jsonify
 from pathlib import Path
@@ -74,63 +77,115 @@ audit_logger = AuditLogger()
 
 def _handle_signing(operation):
     """Common signing logic for both RPMs and repodata"""
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
+    
     # Authenticate request
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': 'Missing or invalid authorization header'}), 401
+        logger.warning(f"[{request_id}] Missing or invalid authorization header")
+        return jsonify({'error': 'Missing or invalid authorization header', 'request_id': request_id}), 401
     
     token = auth_header.split(' ', 1)[1]
     
     try:
         token_info = token_auth.validate_token(token)
+    except ValueError as e:
+        latency = time.time() - start_time
+        err_msg = str(e)
+        status_code = 429 if "Rate limit" in err_msg else 401
+        
+        logger.warning(f"[{request_id}] Auth failure: {err_msg}")
+        
+        # Log auth failures (limit audit spam for unauthorized?)
+        # For rate limits, we definitely want to audit
+        if status_code == 429 or "Unknown token" not in err_msg:
+             audit_logger.log_signing(
+                token_id=getattr(token_auth, 'last_failed_token_id', 'unknown'), # We might not have ID
+                operation=operation,
+                key_used=None,
+                data_hash=None,
+                success=False,
+                client_ip=request.remote_addr,
+                request_id=request_id,
+                latency=latency,
+                error=err_msg
+            )
+        return jsonify({'error': err_msg, 'request_id': request_id}), status_code
     except Exception as e:
-        logger.warning(f"Authentication failed: {e}")
-        return jsonify({'error': 'Invalid token'}), 401
+        logger.error(f"[{request_id}] Systematic auth error: {e}")
+        return jsonify({'error': 'Authentication system error', 'request_id': request_id}), 500
     
     # Check permissions
     required_perm = f'sign:{operation.split("_")[1]}'
     if required_perm not in token_info.get('permissions', []):
-        logger.warning(f"Token {token_info.get('token_id')} lacks {required_perm}")
-        return jsonify({'error': 'Insufficient permissions'}), 403
+        latency = time.time() - start_time
+        logger.warning(f"[{request_id}] Token {token_info.get('token_id')} lacks {required_perm}")
+        
+        audit_logger.log_signing(
+            token_id=token_info['token_id'],
+            operation=operation,
+            key_used=None,
+            data_hash=None,
+            success=False,
+            client_ip=request.remote_addr,
+            request_id=request_id,
+            latency=latency,
+            error='Insufficient permissions'
+        )
+        return jsonify({'error': 'Insufficient permissions', 'request_id': request_id}), 403
     
     # Parse request
-    data = request.get_json()
+    try:
+        data = request.get_json()
+    except Exception:
+        return jsonify({'error': 'Invalid JSON', 'request_id': request_id}), 400
+        
     if not data:
-        return jsonify({'error': 'Invalid JSON'}), 400
+        return jsonify({'error': 'Empty request body', 'request_id': request_id}), 400
     
     raw_data_b64 = data.get('data') 
+    payload_size = len(raw_data_b64) if raw_data_b64 else 0
     
     # DoS Protection: Limit payload size
-    if raw_data_b64 and len(raw_data_b64) > 10 * 1024 * 1024:  # 10MB limit
-        return jsonify({'error': 'Payload too large (limit 10MB)'}), 413
+    if raw_data_b64 and payload_size > 10 * 1024 * 1024:  # 10MB limit
+        latency = time.time() - start_time
+        audit_logger.log_signing(
+            token_id=token_info['token_id'],
+            operation=operation,
+            key_used=None,
+            data_hash=f"size:{payload_size}",
+            success=False,
+            client_ip=request.remote_addr,
+            request_id=request_id,
+            latency=latency,
+            payload_size=payload_size,
+            error='Payload too large'
+        )
+        return jsonify({'error': 'Payload too large (limit 10MB)', 'request_id': request_id}), 413
 
-    package_hash = data.get('package_hash')
-    repodata_hash = data.get('repodata_hash')
+    if not raw_data_b64:
+        return jsonify({'error': 'Missing "data" field', 'request_id': request_id}), 400
+        
     key_type = data.get('key_type', 'legacy')
     
     sign_target = None
     data_id = None
 
-    if raw_data_b64:
-        try:
-            sign_target = base64.b64decode(raw_data_b64)
-            data_id = f"raw_data:{len(sign_target)}b"
-        except Exception as e:
-            return jsonify({'error': f'Invalid Base64 data: {e}'}), 400
-    elif package_hash or repodata_hash:
-        err_msg = (
-            'Signing by hash is deprecated. Please provide base64 encoded "data" field instead '
-            '(e.g., {"data": "base64_encoded_content", "key_type": "modern"})'
-        )
-        return jsonify({'error': err_msg}), 400
-    else:
-        return jsonify({'error': 'Missing "data" field (base64 encoded content required)'}), 400
+    try:
+        sign_target = base64.b64decode(raw_data_b64)
+        data_id = hashlib.sha256(sign_target).hexdigest() # Properly hash the content for audit
+    except Exception as e:
+        return jsonify({'error': f'Invalid Base64 data: {e}', 'request_id': request_id}), 400
     
     # Sign the data
     try:
         passphrase = config.get('MODERN_PASSPHRASE' if key_type == 'modern' else 'LEGACY_PASSPHRASE')
         signature = signing_engine.sign_data(sign_target, key_type, passphrase)
         key_id = signing_engine.get_key_id(key_type)
+        key_fingerprint = signing_engine.get_key_fingerprint(key_type)
+        
+        latency = time.time() - start_time
         
         # Audit log
         audit_logger.log_signing(
@@ -139,17 +194,24 @@ def _handle_signing(operation):
             key_used=key_id,
             data_hash=data_id,
             success=True,
-            client_ip=request.remote_addr
+            client_ip=request.remote_addr,
+            request_id=request_id,
+            latency=latency,
+            key_fingerprint=key_fingerprint,
+            payload_size=payload_size
         )
         
         return jsonify({
             'signature': signature,
             'key_id': key_id,
+            'key_fingerprint': key_fingerprint,
+            'request_id': request_id,
             'timestamp': datetime.now(UTC).isoformat()
         })
     
     except Exception as e:
-        logger.error(f"Signing failed: {e}")
+        latency = time.time() - start_time
+        logger.error(f"[{request_id}] Signing failed: {e}")
         audit_logger.log_signing(
             token_id=token_info['token_id'],
             operation=operation,
@@ -157,9 +219,12 @@ def _handle_signing(operation):
             data_hash=data_id,
             success=False,
             client_ip=request.remote_addr,
-            error=str(e)
+            request_id=request_id,
+            latency=latency,
+            error=str(e),
+            payload_size=payload_size
         )
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'request_id': request_id}), 500
 
 
 @app.route('/api/v1/health', methods=['GET'])

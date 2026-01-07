@@ -30,6 +30,14 @@ class SigningEngine:
             raise ValueError(f"Unknown key type: {key_type}")
         return self.KEYS[key_type]
     
+    def get_key_fingerprint(self, key_type: str) -> str:
+        """Get full fingerprint for a given key type"""
+        key_id = self.get_key_id(key_type)
+        key_list = self.gpg.list_keys(keys=[key_id])
+        if key_list:
+            return key_list[0].get('fingerprint')
+        return None
+    
     def list_keys(self) -> List[Dict]:
         """List available signing keys"""
         keys = []
