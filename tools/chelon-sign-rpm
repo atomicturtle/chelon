@@ -3,40 +3,157 @@
 Chelon Sign RPM
 
 Sign RPM packages using Chelon service.
-Creates detached GPG signatures (.asc files).
-
-Note: This creates detached signatures. For embedded RPM signatures,
-you'll need to use rpm-sign library or rpmsign command with proper integration.
+Supports creating detached signatures (.asc) and embedding signatures via rpmsign integration.
 """
 
 import os
 import sys
 import argparse
+import subprocess
+import tempfile
+import base64
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 # Add tools directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from chelon_client import get_client, ChelonClientError
+try:
+    from chelon_client import get_client, ChelonClientError
+except ImportError:
+    # Handle direct execution if not in path
+    try:
+        from tools.chelon_client import get_client, ChelonClientError
+    except ImportError:
+        print("Error: Could not import chelon_client. Ensure tools/ is in PYTHONPATH.", file=sys.stderr)
+        sys.exit(1)
 
 
-def sign_rpm(rpm_path: str, output_path: Optional[str] = None,
-             key_type: str = 'modern', verbose: bool = False) -> str:
+def gpg_mode(args: List[str]):
+    """
+    Emulate GPG behavior when called by rpmsign.
+    rpmsign calls gpg with flags like:
+    --no-verbose --no-armor --batch --no-tty -u <KEYID> -sbo <SIGFILE> -- -
+    """
+    output_file = None
+    input_file = "-"
+    key_id = None
+    
+    # Simple argument parser for GPG flags
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ('-o', '--output'):
+            output_file = args[i+1]
+            i += 2
+        elif arg == '-sbo':
+            output_file = args[i+1]
+            i += 2
+        elif arg == '-u':
+            key_id = args[i+1]
+            i += 2
+        elif arg == '--':
+            if i + 1 < len(args):
+                input_file = args[i+1]
+            break
+        elif arg == '--version':
+            print("gpg (GnuPG) 2.4.5")
+            sys.exit(0)
+        else:
+            i += 1
+            
+    # Read input data
+    if input_file == "-":
+        data = sys.stdin.buffer.read()
+    else:
+        with open(input_file, 'rb') as f:
+            data = f.read()
+            
+    # Determine key type from key_id (mapping logic)
+    # In this wrapper, we rely on env CHELON_KEY_TYPE or default to modern
+    key_type = os.environ.get('CHELON_KEY_TYPE', 'modern')
+    
+    # Initialize client
+    try:
+        client = get_client()
+        response = client.sign_data(data, key_type=key_type, operation='rpm')
+        signature = response['signature']
+        
+        # rpmsign usually expects binary signature if --armor is not passed
+        # chelon-gpg-wrapper.sh handles this by checking for --armor
+        is_armored = '--armor' in args or '-a' in args
+        
+        if output_file and output_file != '-':
+            with open(output_file, 'w' if is_armored else 'wb') as f:
+                if is_armored:
+                    f.write(signature)
+                else:
+                    # Strip headers and decode if binary expected
+                    # Simplified: just dearmor using gpg if available, or just write as is if armored
+                    if signature.startswith('-----BEGIN'):
+                        # Need to dearmor
+                        proc = subprocess.Popen(['gpg', '--dearmor'], stdin=subprocess.PIPE, stdout=f)
+                        proc.communicate(input=signature.encode('utf-8'))
+                    else:
+                        f.write(base64.b64decode(signature))
+        else:
+            if is_armored:
+                sys.stdout.write(signature)
+            else:
+                sys.stdout.buffer.write(base64.b64decode(signature))
+                
+    except Exception as e:
+        print(f"GPG Emulation Error: {e}", file=sys.stderr)
+        sys.exit(1)
+        
+    sys.exit(0)
+
+
+def resign_rpm(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
+    """
+    Embed signature into RPM using rpmsign and self as wrapper.
+    """
+    rpm_file = Path(rpm_path).absolute()
+    script_path = Path(__file__).absolute()
+    
+    # Map key_type to standard Atomicorp Key IDs if not provided
+    key_ids = {
+        'legacy': '4520AFA9',
+        'modern': 'CB2C73F04F3BE076'
+    }
+    key_id = key_ids.get(key_type, key_type)
+    
+    if verbose:
+        print(f"Resigning RPM: {rpm_file}")
+        print(f"Using Key: {key_type} ({key_id})")
+        
+    # Set environment for the wrapper call
+    os.environ['CHELON_KEY_TYPE'] = key_type
+    
+    cmd = [
+        'rpmsign',
+        '--define', f'__gpg {script_path}',
+        '--define', f'_gpg_name {key_id}',
+        '--define', '_gpg_sign_cmd_extra_args --batch --no-tty',
+        '--resign', str(rpm_file)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=not verbose, text=True)
+        if verbose:
+            print("✓ Signature embedded successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error during rpmsign: {e.stderr if e.stderr else e}", file=sys.stderr)
+        return False
+
+
+def sign_rpm_detached(rpm_path: str, output_path: Optional[str] = None,
+                      key_type: str = 'modern', verbose: bool = False) -> str:
     """
     Sign an RPM file (creates detached signature)
-    
-    Args:
-        rpm_path: Path to RPM file
-        output_path: Path for signature file (default: rpm_path + '.asc')
-        key_type: GPG key type to use
-        verbose: Print verbose output
-        
-    Returns:
-        Path to signature file
     """
     rpm_file = Path(rpm_path)
-    
     if not rpm_file.exists():
         raise FileNotFoundError(f"RPM file not found: {rpm_path}")
     
@@ -47,58 +164,40 @@ def sign_rpm(rpm_path: str, output_path: Optional[str] = None,
         print(f"Signing: {rpm_path}")
         print(f"Output: {output_path}")
         print(f"Key type: {key_type}")
-        print(f"Note: Creating detached signature (not embedding in RPM)")
     
-    # Get client
     try:
         client = get_client()
-    except ChelonClientError as e:
-        print(f"Error initializing client: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    # Sign the file
-    try:
-        if verbose:
-            file_size = rpm_file.stat().st_size
-            print(f"RPM size: {file_size:,} bytes")
-            print("Sending signing request...")
-        
         response = client.sign_file(str(rpm_file), key_type=key_type, operation='rpm')
         
-        if verbose:
-            print(f"✓ Signed successfully")
-            print(f"  Request ID: {response.get('request_id')}")
-            print(f"  Key ID: {response.get('key_id')}")
-            print(f"  Key Fingerprint: {response.get('key_fingerprint')}")
-        
-        # Write signature to file
-        signature = response['signature']
         with open(output_path, 'w') as f:
-            f.write(signature)
+            f.write(response['signature'])
         
         if verbose:
             print(f"✓ Signature written to: {output_path}")
-            print()
-            print("To verify: gpg --verify", output_path, rpm_path)
-        
         return output_path
         
     except ChelonClientError as e:
         print(f"Error signing file: {e}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        sys.exit(1)
 
 
 def main():
+    # Detect if we are being called as a GPG wrapper
+    # rpmsign usually calls with a lot of flags, first one is often --no-verbose
+    if len(sys.argv) > 1 and sys.argv[1].startswith('--'):
+        # Check if it looks like a GPG call (batch, detach-sign, etc)
+        gpg_flags = {'--version', '--batch', '-sbo', '--detach-sign', '--armor', '-u'}
+        if any(arg in gpg_flags for arg in sys.argv):
+            gpg_mode(sys.argv[1:])
+
     parser = argparse.ArgumentParser(
-        description='Sign RPM packages using Chelon service (creates detached signatures)',
+        description='Sign RPM packages using Chelon service',
         epilog='Environment variables: CHELON_URL, CHELON_TOKEN, CHELON_CERT_DIR'
     )
     
     parser.add_argument('rpm_file', help='Path to RPM file')
-    parser.add_argument('-o', '--output', help='Output signature file (default: <rpm_file>.asc)')
+    parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign)')
+    parser.add_argument('-o', '--output', help='Output signature file (default: <rpm_file>.asc, only for detached)')
     parser.add_argument('-k', '--key-type', choices=['legacy', 'modern'], default='modern',
                        help='GPG key type to use (default: modern)')
     parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
@@ -106,31 +205,28 @@ def main():
     
     args = parser.parse_args()
     
-    # Set verify_ssl based on --insecure flag
     if args.insecure:
         os.environ['CHELON_VERIFY_SSL'] = 'false'
     
     try:
-        output_file = sign_rpm(
-            args.rpm_file,
-            output_path=args.output,
-            key_type=args.key_type,
-            verbose=args.verbose
-        )
-        
-        if not args.verbose:
-            print(output_file)
-        
-        return 0
-        
+        if args.resign:
+            success = resign_rpm(args.rpm_file, key_type=args.key_type, verbose=args.verbose)
+            return 0 if success else 1
+        else:
+            output_file = sign_rpm_detached(
+                args.rpm_file,
+                output_path=args.output,
+                key_type=args.key_type,
+                verbose=args.verbose
+            )
+            if not args.verbose:
+                print(output_file)
+            return 0
+            
     except KeyboardInterrupt:
-        print("\nInterrupted", file=sys.stderr)
         return 130
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
         return 1
 
 

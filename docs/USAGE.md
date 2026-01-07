@@ -38,8 +38,12 @@ scp /etc/chelon/certs/chelon_ca.crt ~/.chelon/certs/
 ### Sign an RPM
 
 ```bash
-# Sign a single RPM
+# Sign a single RPM (detached signature)
 chelon-sign-rpm package.rpm
+
+# Embed signature into RPM header (Integrated Signing)
+# This allows 'rpm -K' to work natively
+chelon-sign-rpm --resign package.rpm
 
 # Specify key type
 chelon-sign-rpm --key-type legacy package.rpm

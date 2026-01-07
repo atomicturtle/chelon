@@ -151,7 +151,11 @@ class TokenAuth:
         
         token_id, secret = token.split(':', 1)
         
-        # Check if token exists
+        # Check if token exists, reload if not found (to handle new tokens without restart)
+        if token_id not in self.tokens:
+            logger.info(f"Token {token_id} not found in memory, reloading from {self.tokens_file}")
+            self.tokens = self._load_tokens()
+            
         if token_id not in self.tokens:
             raise ValueError(f"Unknown token: {token_id}")
         
