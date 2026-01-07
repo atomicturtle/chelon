@@ -91,8 +91,11 @@ class ChelonClient:
         
         # Setup SSL context
         if self.verify_ssl:
-            # When verifying SSL, use the provided CA certificate file
-            ssl_context = ssl.create_default_context(cafile=str(self.ca_cert))
+            # When verifying SSL, ensure the provided CA certificate file exists before using it
+            ca_cert_path = Path(self.ca_cert) if not isinstance(self.ca_cert, Path) else self.ca_cert
+            if not ca_cert_path.is_file():
+                raise ChelonClientError(f"CA certificate file not found: {ca_cert_path}")
+            ssl_context = ssl.create_default_context(cafile=str(ca_cert_path))
         else:
             # When not verifying SSL, do not load a CA file
             ssl_context = ssl.create_default_context()
