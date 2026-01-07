@@ -115,6 +115,173 @@ def view_audit(args):
         print(f"Error viewing audit logs: {e}")
 
 
+def get_keys_file(config_file):
+    """Get path to keys.json file from config"""
+    data_dir = '/var/lib/chelon'
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                for line in f:
+                    if line.strip().startswith('DATA_DIR='):
+                        data_dir = line.split('=', 1)[1].strip()
+        except Exception:
+            pass
+    return Path(data_dir) / 'keys.json'
+
+
+def load_keys_config(keys_file):
+    """Load keys configuration from JSON file"""
+    if not keys_file.exists():
+        return {'keys': {}, 'default_key': None}
+    
+    try:
+        with open(keys_file, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading keys file: {e}")
+        sys.exit(1)
+
+
+def save_keys_config(keys_file, config):
+    """Save keys configuration to JSON file"""
+    try:
+        keys_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(keys_file, 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"Error saving keys file: {e}")
+        sys.exit(1)
+
+
+def handle_keys_command(args):
+    """Handle keys subcommands"""
+    keys_file = get_keys_file(args.config)
+    
+    if not args.keys_command:
+        print("Error: No keys subcommand specified")
+        print("Use: chelon-admin keys {list|add|remove|enable|disable|set-default}")
+        return
+    
+    if args.keys_command == 'list':
+        list_keys(keys_file)
+    elif args.keys_command == 'add':
+        add_key(keys_file, args.name, args.key_id, args.description)
+    elif args.keys_command == 'remove':
+        remove_key(keys_file, args.name)
+    elif args.keys_command == 'enable':
+        enable_key(keys_file, args.name)
+    elif args.keys_command == 'disable':
+        disable_key(keys_file, args.name)
+    elif args.keys_command == 'set-default':
+        set_default_key(keys_file, args.name)
+
+
+def list_keys(keys_file):
+    """List all configured keys"""
+    config = load_keys_config(keys_file)
+    keys = config.get('keys', {})
+    default_key = config.get('default_key')
+    
+    if not keys:
+        print("No keys configured")
+        return
+    
+    print(f"{'Name':<20} {'Key ID':<20} {'Status':<10} {'Default':<10} {'Description'}")
+    print("-" * 90)
+    for name, info in keys.items():
+        enabled = "enabled" if info.get('enabled', True) else "disabled"
+        is_default = "✓" if name == default_key else ""
+        description = info.get('description', '')
+        key_id = info.get('key_id', '')
+        print(f"{name:<20} {key_id:<20} {enabled:<10} {is_default:<10} {description}")
+
+
+def add_key(keys_file, name, key_id, description):
+    """Add a new key"""
+    import re
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        print(f"Error: Invalid key name '{name}'. Use only alphanumeric, underscore, or dash.")
+        sys.exit(1)
+    
+    config = load_keys_config(keys_file)
+    if name in config.get('keys', {}):
+        print(f"Error: Key '{name}' already exists")
+        sys.exit(1)
+    
+    config.setdefault('keys', {})[name] = {
+        'key_id': key_id,
+        'description': description,
+        'enabled': True
+    }
+    
+    # Set as default if no default exists
+    if not config.get('default_key'):
+        config['default_key'] = name
+    
+    save_keys_config(keys_file, config)
+    print(f"Added key '{name}' ({key_id})")
+
+
+def remove_key(keys_file, name):
+    """Remove a key"""
+    config = load_keys_config(keys_file)
+    if name not in config.get('keys', {}):
+        print(f"Error: Key '{name}' not found")
+        sys.exit(1)
+    
+    if config.get('default_key') == name:
+        print(f"Error: Cannot remove default key '{name}'. Set another key as default first.")
+        sys.exit(1)
+    
+    del config['keys'][name]
+    save_keys_config(keys_file, config)
+    print(f"Removed key '{name}'")
+
+
+def enable_key(keys_file, name):
+    """Enable a key"""
+    config = load_keys_config(keys_file)
+    if name not in config.get('keys', {}):
+        print(f"Error: Key '{name}' not found")
+        sys.exit(1)
+    
+    config['keys'][name]['enabled'] = True
+    save_keys_config(keys_file, config)
+    print(f"Enabled key '{name}'")
+
+
+def disable_key(keys_file, name):
+    """Disable a key"""
+    config = load_keys_config(keys_file)
+    if name not in config.get('keys', {}):
+        print(f"Error: Key '{name}' not found")
+        sys.exit(1)
+    
+    if config.get('default_key') == name:
+        print(f"Error: Cannot disable default key '{name}'. Set another key as default first.")
+        sys.exit(1)
+    
+    config['keys'][name]['enabled'] = False
+    save_keys_config(keys_file, config)
+    print(f"Disabled key '{name}'")
+
+
+def set_default_key(keys_file, name):
+    """Set default key"""
+    config = load_keys_config(keys_file)
+    if name not in config.get('keys', {}):
+        print(f"Error: Key '{name}' not found")
+        sys.exit(1)
+    
+    if not config['keys'][name].get('enabled', True):
+        print(f"Error: Cannot set disabled key '{name}' as default")
+        sys.exit(1)
+    
+    config['default_key'] = name
+    save_keys_config(keys_file, config)
+    print(f"Set '{name}' as default key")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Chelon Administration Tool')
     parser.add_argument('--config', default=os.environ.get('CHELON_CONFIG', '/etc/chelon/chelon.conf'),
@@ -141,6 +308,36 @@ def main():
     audit_parser.add_argument('--limit', type=int, default=100,
                              help='Number of recent logs to show (default: 100)')
     
+    # Key management
+    keys_parser = subparsers.add_parser('keys', help='Manage signing keys')
+    keys_subparsers = keys_parser.add_subparsers(dest='keys_command', help='Keys command')
+    
+    # keys list
+    keys_subparsers.add_parser('list', help='List configured keys')
+    
+    # keys add
+    keys_add = keys_subparsers.add_parser('add', help='Add a new key')
+    keys_add.add_argument('name', help='Key name (alphanumeric, underscore, dash)')
+    keys_add.add_argument('key_id', help='GPG key ID')
+    keys_add.add_argument('--description', default='', help='Key description')
+    
+    # keys remove
+    keys_remove = keys_subparsers.add_parser('remove', help='Remove a key')
+    keys_remove.add_argument('name', help='Key name to remove')
+    
+    # keys enable
+    keys_enable = keys_subparsers.add_parser('enable', help='Enable a key')
+    keys_enable.add_argument('name', help='Key name to enable')
+    
+    # keys disable
+    keys_disable = keys_subparsers.add_parser('disable', help='Disable a key')
+    keys_disable.add_argument('name', help='Key name to disable')
+    
+    # keys set-default
+    keys_default = keys_subparsers.add_parser('set-default', help='Set default key')
+    keys_default.add_argument('name', help='Key name to set as default')
+    
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -156,6 +353,14 @@ def main():
         revoke_token(args)
     elif args.command == 'audit':
         view_audit(args)
+    elif args.command == 'keys':
+        if not args.key_command:
+            keys_parser.print_help()
+            return 1
+        handle_keys_command(args)
+    else:
+        print(f"Unknown command: {args.command}")
+        return 1
     
     return 0
 

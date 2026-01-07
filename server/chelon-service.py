@@ -68,7 +68,11 @@ config = load_config(CONFIG_FILE)
 # Log config status
 logger.info("Configuration loaded successfully")
 
-signing_engine = SigningEngine()
+# Determine data directory
+data_dir = config.get('DATA_DIR', '/var/lib/chelon')
+keys_file = os.path.join(data_dir, 'keys.json')
+
+signing_engine = SigningEngine(keys_file=keys_file)
 token_auth = TokenAuth(config_file=CONFIG_FILE)
 audit_logger = AuditLogger()
 
