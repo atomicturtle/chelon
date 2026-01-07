@@ -146,18 +146,62 @@ def _handle_signing(operation):
     # Parse request
     try:
         data = request.get_json()
-    except Exception:
+    except Exception as e:
+        logger.error(f"[{request_id}] Invalid JSON: {e}")
         return jsonify({'error': 'Invalid JSON', 'request_id': request_id}), 400
-        
+    
     if not data:
         return jsonify({'error': 'Empty request body', 'request_id': request_id}), 400
     
-    raw_data_b64 = data.get('data') 
-    payload_size = len(raw_data_b64) if raw_data_b64 else 0
+    raw_data_b64 = data.get('data')
     
-    # DoS Protection: Limit payload size
-    # 10MB limit on actual decoded data (not base64-encoded size)
-    if raw_data_b64 and payload_size > 10 * 1024 * 1024:  # 10MB limit
+    # DoS Protection: Check base64 string size BEFORE decoding to prevent memory exhaustion
+    # Base64 encoding increases size by ~33%, so 13.3MB base64 = ~10MB decoded
+    if raw_data_b64:
+        base64_size = len(raw_data_b64)
+        # Quick rejection: if base64 string is > 13.3MB, decoded will be > 10MB
+        if base64_size > 13981013:  # ~13.3MB in bytes
+            latency = time.time() - start_time
+            audit_logger.log_signing(
+                token_id=token_info['token_id'],
+                operation=operation,
+                key_used=None,
+                data_hash=f"size:{base64_size}",
+                success=False,
+                client_ip=request.remote_addr,
+                request_id=request_id,
+                latency=latency,
+                payload_size=base64_size,
+                error='Payload too large (pre-decode check)'
+            )
+            return jsonify({'error': 'Payload too large (base64 size exceeds limit)', 'request_id': request_id}), 413
+    
+    # Decode and validate payload
+    try:
+        if not raw_data_b64:
+            raise ValueError("Missing 'data' field")
+        raw_data = base64.b64decode(raw_data_b64)
+    except Exception as e:
+        logger.error(f"[{request_id}] Failed to decode data: {e}")
+        latency = time.time() - start_time
+        audit_logger.log_signing(
+            token_id=token_info['token_id'],
+            operation=operation,
+            key_used=None,
+            data_hash=None,
+            success=False,
+            client_ip=request.remote_addr,
+            request_id=request_id,
+            latency=latency,
+            error=f"Invalid base64 data: {str(e)}"
+        )
+        return jsonify({'error': f'Invalid base64 data: {str(e)}', 'request_id': request_id}), 400
+    
+    # Calculate actual decoded payload size
+    payload_size = len(raw_data)
+    
+    # Secondary check: verify decoded size is within limit
+    if payload_size > 10 * 1024 * 1024:  # 10MB limit
         latency = time.time() - start_time
         audit_logger.log_signing(
             token_id=token_info['token_id'],
@@ -173,10 +217,11 @@ def _handle_signing(operation):
         )
         return jsonify({'error': f'Payload too large (decoded size: {payload_size} bytes, limit: 10MB)', 'request_id': request_id}), 413
 
-    if not raw_data_b64:
-        return jsonify({'error': 'Missing "data" field', 'request_id': request_id}), 400
-        
+    # Validate key_type parameter
     key_type = data.get('key_type', 'legacy')
+    if key_type not in ['legacy', 'modern']:
+        logger.warning(f"[{request_id}] Invalid key_type: {key_type}")
+        return jsonify({'error': f'Invalid key_type: {key_type}. Must be "legacy" or "modern"', 'request_id': request_id}), 400
     
     sign_target = None
     data_id = None
