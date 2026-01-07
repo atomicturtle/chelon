@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 from pathlib import Path
+from typing import Optional
 
 # Add tools directory to path for chelon_client import
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
