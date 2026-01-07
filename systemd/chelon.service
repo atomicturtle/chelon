@@ -7,10 +7,10 @@ Type=simple
 User=chelon
 Group=chelon
 WorkingDirectory=/usr/share/chelon/server
-Environment="ORACLE_HOST=0.0.0.0"
-Environment="ORACLE_PORT=5050"
-Environment="ORACLE_CONFIG=/etc/chelon/chelon.conf"
-ExecStart=/usr/bin/python3 /usr/share/chelon/server/oracle-service.py
+Environment="CHELON_HOST=0.0.0.0"
+Environment="CHELON_PORT=5050"
+Environment="CHELON_CONFIG=/etc/chelon/chelon.conf"
+ExecStart=/usr/bin/python3 /usr/share/chelon/server/chelon-service.py
 Restart=always
 RestartSec=10
 

@@ -46,7 +46,7 @@ install -d %{buildroot}%{_unitdir}
 install -d %{buildroot}%{_localstatedir}/lib/%{name}
 
 # Install server files
-install -m 755 server/oracle-service.py %{buildroot}%{_datadir}/%{name}/server/
+install -m 755 server/chelon-service.py %{buildroot}%{_datadir}/%{name}/server/
 install -m 644 server/signing_engine.py %{buildroot}%{_datadir}/%{name}/server/
 install -m 644 server/auth.py %{buildroot}%{_datadir}/%{name}/server/
 install -m 644 server/audit.py %{buildroot}%{_datadir}/%{name}/server/

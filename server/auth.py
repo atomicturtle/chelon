@@ -121,7 +121,7 @@ class TokenAuth:
         
         # Verify secret
         secret_hash = hashlib.sha256(secret.encode()).hexdigest()
-        if secret_hash != token_info['secret_hash']:
+        if not secrets.compare_digest(secret_hash, token_info['secret_hash']):
             raise ValueError("Invalid token secret")
         
         # Check rate limit (Fixed Window)

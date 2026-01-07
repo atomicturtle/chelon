@@ -47,4 +47,4 @@ deps:
 test-local:
 	@echo "Starting Chelon service locally on port 5050..."
 	@echo "Make sure GPG keys are imported first!"
-	cd server && python3 oracle-service.py
+	cd server && python3 chelon-service.py

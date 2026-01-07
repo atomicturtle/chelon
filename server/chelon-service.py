@@ -20,7 +20,7 @@ from audit import AuditLogger
 app = Flask(__name__)
 
 # Configuration
-CONFIG_FILE = os.environ.get('ORACLE_CONFIG', '/etc/chelon/chelon.conf')
+CONFIG_FILE = os.environ.get('CHELON_CONFIG', '/etc/chelon/chelon.conf')
 DATA_DIR = '/var/lib/chelon'
 
 def load_config(path):
@@ -184,8 +184,38 @@ def sign_repodata():
 
 if __name__ == '__main__':
     # Run the Flask app
-    host = os.environ.get('ORACLE_HOST', '127.0.0.1')
-    port = int(os.environ.get('ORACLE_PORT', 5050))
+    host = os.environ.get('CHELON_HOST', '127.0.0.1')
+    port = int(os.environ.get('CHELON_PORT', 5050))
 
     logger.info(f"Starting Chelon service on {host}:{port}")
-    app.run(host=host, port=port, debug=False)
+
+    # SSL Configuration
+    ssl_cert = os.environ.get('CHELON_SSL_CERT', config.get('CHELON_SSL_CERT'))
+    ssl_key = os.environ.get('CHELON_SSL_KEY', config.get('CHELON_SSL_KEY'))
+    ssl_ca = os.environ.get('CHELON_SSL_CA', config.get('CHELON_SSL_CA'))
+    verify_client = os.environ.get('CHELON_SSL_VERIFY_CLIENT', config.get('CHELON_SSL_VERIFY_CLIENT', 'false')).lower() == 'true'
+
+    ssl_context = None
+    if ssl_cert and ssl_key:
+        if not os.path.exists(ssl_cert) or not os.path.exists(ssl_key):
+            logger.error(f"SSL cert or key not found: {ssl_cert}, {ssl_key}")
+            sys.exit(1)
+            
+        import ssl
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(ssl_cert, ssl_key)
+        
+        if ssl_ca:
+            if not os.path.exists(ssl_ca):
+                logger.error(f"SSL CA not found: {ssl_ca}")
+                sys.exit(1)
+            ssl_context.load_verify_locations(ssl_ca)
+            
+            if verify_client:
+                ssl_context.verify_mode = ssl.CERT_REQUIRED
+            else:
+                ssl_context.verify_mode = ssl.CERT_OPTIONAL
+        
+        logger.info(f"SSL Enabled. Client Verify: {verify_client}")
+    
+    app.run(host=host, port=port, debug=False, ssl_context=ssl_context)
