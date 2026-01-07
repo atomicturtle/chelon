@@ -10,7 +10,6 @@ import os
 import sys
 import json
 import base64
-import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any
 from urllib.parse import urljoin
