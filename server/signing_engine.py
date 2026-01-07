@@ -46,12 +46,12 @@ class SigningEngine:
                 })
         return keys
     
-    def sign_data(self, data_hash: str, key_type: str, passphrase: str = None) -> str:
+    def sign_data(self, data: bytes, key_type: str, passphrase: str = None) -> str:
         """
         Sign data using specified key
         
         Args:
-            data_hash: Hash of data to sign (e.g., "sha256:abc123...")
+            data: Raw data to sign (bytes)
             key_type: Type of key to use ('legacy' or 'modern')
             passphrase: GPG key passphrase
         
@@ -62,9 +62,9 @@ class SigningEngine:
         
         logger.info(f"Signing data with {key_type} key ({key_id})")
         
-        # Sign the hash
+        # Sign the data
         signed = self.gpg.sign(
-            data_hash,
+            data,
             keyid=key_id,
             passphrase=passphrase,
             detach=True,

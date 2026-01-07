@@ -101,14 +101,10 @@ def _handle_signing(operation):
             data_id = f"raw_data:{len(sign_target)}b"
         except Exception as e:
             return jsonify({'error': f'Invalid Base64 data: {e}'}), 400
-    elif package_hash:
-        sign_target = package_hash
-        data_id = package_hash
-    elif repodata_hash:
-        sign_target = repodata_hash
-        data_id = repodata_hash
+    elif package_hash or repodata_hash:
+        return jsonify({'error': 'Signing by hash is deprecated. Please provide base64 encoded "data".'}), 400
     else:
-        return jsonify({'error': 'Missing signing target (data, package_hash, or repodata_hash)'}), 400
+        return jsonify({'error': 'Missing "data" field (base64 encoded content required)'}), 400
     
     # Sign the data
     try:
