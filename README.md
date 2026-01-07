@@ -13,7 +13,8 @@ Chelon is a secure remote signing service for RPM packages and repository metada
 
 ## Documentation
 
-- **[Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md)** - Gunicorn, Nginx, HA setup
+- **[Usage Guide](docs/USAGE.md)** - How to sign RPMs and repository metadata
+- **[Signing Strategy](docs/SIGNING_STRATEGY.md)** - Technical details on signing approach
 - **[Quick Start](#quick-start)** - Get started in 5 minutes
 - **[Administration](#administration)** - Key and token management
 
@@ -272,21 +273,6 @@ To enable HTTPS and Mutual TLS (mTLS):
 | `/usr/share/chelon/` | Service code |
 | `/usr/bin/chelon-admin` | Administration CLI |
 
-## Production Deployment
-
-> [!NOTE]
-> Your current Flask-based setup is already production-ready! No additional software needed.
-
-**Current Setup:**
-- Flask with built-in SSL/mTLS
-- Handles 10-50 requests/minute
-- Perfect for typical build infrastructure
-
-**Optional Upgrades:**
-- **Gunicorn** - For high traffic (100+ requests/minute)
-- **Nginx** - For load balancing multiple servers
-
-See [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md) for details on when and how to upgrade.
 
 ## Troubleshooting
 
