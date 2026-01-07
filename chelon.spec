@@ -138,7 +138,7 @@ fi
 %{_datadir}/%{name}/client/
 
 %changelog
-* Tue Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-2
+* Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-2
 - Split into server and client subpackages
 - Add client signing tools (chelon-sign-rpm, chelon-sign-repomd)
 - Add binary data signing support
@@ -148,7 +148,7 @@ fi
 - Fixed hardcoded admin tool paths
 - Code review fixes: config ownership, SSL validation, payload size checks
 
-* Mon Jan 06 2026 Atomicorp <support@atomicorp.com> - 1.0.0-1
+* Tue Jan 06 2026 Atomicorp <support@atomicorp.com> - 1.0.0-1
 - Initial package
 - Flask-based HTTP API for remote signing
 - Support for Legacy and Modern GPG keys

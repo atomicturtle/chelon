@@ -196,8 +196,6 @@ sudo journalctl -u chelon -n 100
 ## Transport Security (HTTPS/mTLS)
 
 To enable HTTPS and Mutual TLS (mTLS):
-
-To enable HTTPS and Mutual TLS (mTLS):
 1.  **Generate Certificates**: Creating a CA, Server, and Client certificate.
     ```bash
     # Create directory for certs
