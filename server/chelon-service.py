@@ -5,7 +5,6 @@ Flask API for signing RPM packages and repository metadata
 
 import os
 import sys
-import json
 import uuid
 import time
 import logging
