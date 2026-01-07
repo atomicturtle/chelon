@@ -95,11 +95,15 @@ def _handle_signing(operation):
         
         logger.warning(f"[{request_id}] Auth failure: {err_msg}")
         
+        # Use extracted token_id if available, otherwise hash the token for audit trail
+        if not token_id:
+            token_id = hashlib.sha256(token.encode('utf-8')).hexdigest()[:16] if token else 'empty'
+        
         # Log auth failures (limit audit spam for unauthorized?)
         # For rate limits, we definitely want to audit
         if status_code == 429 or "Unknown token" not in err_msg:
              audit_logger.log_signing(
-                token_id=getattr(token_auth, 'last_failed_token_id', 'unknown'), # We might not have ID
+                token_id=token_id,
                 operation=operation,
                 key_used=None,
                 data_hash=None,
