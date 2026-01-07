@@ -11,6 +11,43 @@ Chelon is a secure remote signing service for RPM packages and repository metada
 - **Systemd Integration**: Runs as unprivileged service with journald logging
 - **mTLS Support**: Optional mutual TLS for enhanced security
 
+## Documentation
+
+- **[Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md)** - Gunicorn, Nginx, HA setup
+- **[Quick Start](#quick-start)** - Get started in 5 minutes
+- **[Administration](#administration)** - Key and token management
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Build Servers  │
+│  (GitLab CI)    │
+└────────┬────────┘
+         │ HTTPS + mTLS
+         │ (Port 443/5050)
+         ▼
+┌─────────────────┐
+│ Chelon Service  │
+│  - Flask API    │
+│  - Auth/Tokens  │
+│  - Rate Limiting│
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Signing Engine  │
+│  - GPG Keyring  │
+│  - Key Config   │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Audit Logger   │
+│  (journald)     │
+└─────────────────┘
+```
+
 ## Installation
 
 ```bash
@@ -234,6 +271,27 @@ To enable HTTPS and Mutual TLS (mTLS):
 | `/usr/share/chelon/` | Service code |
 | `/usr/bin/chelon-admin` | Administration CLI |
 
+## Production Deployment
+
+> [!IMPORTANT]
+> For production deployments, use Gunicorn + Nginx instead of Flask's development server.
+
+**Quick Production Setup:**
+
+```bash
+# Install Gunicorn
+sudo pip3 install gunicorn
+
+# Run with Gunicorn
+sudo -u chelon gunicorn \
+  --workers 4 \
+  --bind 127.0.0.1:5050 \
+  chelon-service:app
+```
+
+**Full production setup with Nginx, SSL, monitoring:**
+- See [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md)
+
 ## Troubleshooting
 
 ### Service won't start
@@ -266,8 +324,19 @@ sudo chelon-admin list-tokens
 sudo chelon-admin audit --limit 20
 ```
 
+### Keys not configured
+
+```bash
+# Check if keys.json exists
+ls -la /var/lib/chelon/keys.json
+
+# Add keys
+sudo chelon-admin keys add keyname KEYID --description "Description"
+```
+
 ## Support
 
 For issues and questions:
-- Email: support@atomicorp.com
-- Web: https://www.atomicorp.com
+- **Documentation:** [docs/](docs/)
+- **Email:** support@atomicorp.com
+- **Web:** https://www.atomicorp.com
