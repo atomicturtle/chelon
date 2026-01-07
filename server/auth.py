@@ -23,7 +23,7 @@ class TokenAuth:
         """Initialize token auth"""
         self.config_file = Path(config_file)
         self.tokens_file = Path('/var/lib/chelon/tokens.json')
-        self.rate_limits = {}  # token_id -> request count
+        self.rate_limits = {}  # token_id -> {'count': int, 'window_start': float}
         
         # Load tokens
         self.tokens = self._load_tokens()
@@ -122,14 +122,29 @@ class TokenAuth:
         if secret_hash != token_info['secret_hash']:
             raise ValueError("Invalid token secret")
         
-        # Check rate limit (simple implementation)
-        # TODO: Implement proper time-based rate limiting
-        request_count = self.rate_limits.get(token_id, 0)
-        if request_count >= token_info['rate_limit']:
+        # Check rate limit (Fixed Window)
+        now = datetime.now(UTC)
+        window_size = 3600  # 1 hour in seconds
+        
+        limit_data = self.rate_limits.get(token_id, {
+            'count': 0,
+            'window_start': now.timestamp()
+        })
+        
+        # Check if window has expired
+        if now.timestamp() - limit_data['window_start'] > window_size:
+            # Reset window
+            limit_data = {
+                'count': 0,
+                'window_start': now.timestamp()
+            }
+        
+        if limit_data['count'] >= token_info['rate_limit']:
             raise ValueError("Rate limit exceeded")
         
         # Increment request count
-        self.rate_limits[token_id] = request_count + 1
+        limit_data['count'] += 1
+        self.rate_limits[token_id] = limit_data
         
         # Update last used timestamp
         token_info['last_used'] = datetime.now(UTC).isoformat()
