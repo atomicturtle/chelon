@@ -90,7 +90,7 @@ def view_audit(args):
                 journal_entry = json.loads(line)
                 message = journal_entry.get('MESSAGE', '')
                 # Message format is "AUDIT_ENTRY: {json}"
-                if message.startswith('AUDIT_ENTRY: '):
+                if isinstance(message, str) and message.startswith('AUDIT_ENTRY: '):
                     audit_json = message[len('AUDIT_ENTRY: '):]
                     logs.append(json.loads(audit_json))
             except json.JSONDecodeError:
