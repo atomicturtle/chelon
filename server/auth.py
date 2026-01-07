@@ -23,13 +23,45 @@ class TokenAuth:
     def __init__(self, config_file: str = '/etc/chelon/chelon.conf'):
         """Initialize token auth"""
         self.config_file = Path(config_file)
-        self.tokens_file = Path('/var/lib/chelon/tokens.json')
+        
+        # Determine data directory from config
+        data_dir = '/var/lib/chelon'
+        if self.config_file.exists():
+            # Security check: verify config file permissions and ownership
+            try:
+                file_stat = self.config_file.stat()
+                mode = stat.S_IMODE(file_stat.st_mode)
+                # Check for world access (read/write/execute)
+                if mode & (stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH):
+                    logger.critical(f"Config file {self.config_file} is world-accessible ({oct(mode)}). ")
+                    logger.critical("Please secure it: chmod 600 or 640 " + str(self.config_file))
+                    sys.exit(1)
+                
+                # Check ownership - should be owned by root or current user
+                current_uid = os.getuid()
+                if file_stat.st_uid not in (0, current_uid):
+                    logger.critical(f"Config file {self.config_file} is owned by UID {file_stat.st_uid}, not root (0) or current user ({current_uid})")
+                    logger.critical("Please fix ownership: chown root:chelon " + str(self.config_file))
+                    sys.exit(1)
+            except Exception as e:
+                logger.critical(f"Failed to perform security checks on config file {self.config_file}: {e}")
+                sys.exit(1)
+
+            try:
+                with open(self.config_file, 'r') as f:
+                    for line in f:
+                        if line.strip().startswith('DATA_DIR='):
+                            data_dir = line.split('=', 1)[1].strip()
+            except Exception as e:
+                logger.warning(f"Failed to read config {self.config_file}: {e}")
+        
+        self.tokens_file = Path(data_dir) / 'tokens.json'
         self.rate_limits = {}  # token_id -> {'count': int, 'window_start': float}
         self._lock = threading.Lock()
         
         # Load tokens
         self.tokens = self._load_tokens()
-        logger.info(f"Loaded {len(self.tokens)} tokens")
+        logger.info(f"Loaded {len(self.tokens)} tokens from {self.tokens_file}")
     
     def _load_tokens(self) -> Dict:
         """Load tokens from file"""
