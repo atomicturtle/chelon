@@ -50,7 +50,7 @@ Chelon is a secure remote signing service for RPM packages and repository metada
 ## Installation
 
 ```bash
-sudo dnf install chelon-1.0.0-1.fc43.noarch.rpm
+sudo dnf install chelon
 ```
 
 ## Quick Start
@@ -120,10 +120,10 @@ sudo systemctl status chelon
 
 ```bash
 # Health check
-curl http://localhost:5050/api/v1/health
+curl -k https://localhost:5050/api/v1/health
 
 # List available keys
-curl http://localhost:5050/api/v1/keys
+curl -k https://localhost:5050/api/v1/keys
 ```
 
 ## Configuration
@@ -166,11 +166,11 @@ sudo systemctl restart chelon
 ### Sign an RPM Package
 
 ```bash
-curl -X POST http://localhost:5050/api/v1/sign/rpm \
+curl -k -X POST https://localhost:5050/api/v1/sign/rpm \
   -H "Authorization: Bearer YOUR-TOKEN-HERE" \
   -H "Content-Type: application/json" \
   -d '{
-    "package_hash": "sha256:abc123...",
+    "data": "sha256:abc123...",
     "key_type": "modern"
   }'
 ```
@@ -178,11 +178,11 @@ curl -X POST http://localhost:5050/api/v1/sign/rpm \
 ### Sign Repository Metadata
 
 ```bash
-curl -X POST http://localhost:5050/api/v1/sign/repodata \
+curl -k -X POST https://localhost:5050/api/v1/sign/repodata \
   -H "Authorization: Bearer YOUR-TOKEN-HERE" \
   -H "Content-Type: application/json" \
   -d '{
-    "repodata_hash": "sha256:def456...",
+    "data": "sha256:def456...",
     "key_type": "legacy"
   }'
 ```
@@ -266,7 +266,9 @@ To enable HTTPS and Mutual TLS (mTLS):
 | Path | Purpose |
 |------|---------|
 | `/etc/chelon/chelon.conf` | Configuration file |
-| `/var/lib/chelon/` | Data directory (GPG keys, tokens, audit log) |
+| `/var/lib/chelon/keys.json` | Key configuration |
+| `/var/lib/chelon/tokens.json` | API tokens |
+| `/var/lib/chelon/.gnupg` | GPG keyring |
 | `/usr/share/chelon/` | Service code |
 | `/usr/bin/chelon-admin` | Administration CLI |
 
