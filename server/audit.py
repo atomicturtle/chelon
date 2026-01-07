@@ -71,4 +71,8 @@ class AuditLogger:
         # This function is now deprecated in favor of journalctl
         # We return empty here to avoid breaking callers instantly, 
         # but the admin tool will be updated to fetch from journal.
+        self.logger.warning(
+            "AuditLogger.get_recent_logs is deprecated and returns an empty list; "
+            "use journalctl to access audit logs instead."
+        )
         return []
