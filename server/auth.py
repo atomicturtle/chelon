@@ -9,6 +9,7 @@ import hashlib
 import secrets
 import pwd
 import grp
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime, UTC
@@ -24,6 +25,7 @@ class TokenAuth:
         self.config_file = Path(config_file)
         self.tokens_file = Path('/var/lib/chelon/tokens.json')
         self.rate_limits = {}  # token_id -> {'count': int, 'window_start': float}
+        self._lock = threading.Lock()
         
         # Load tokens
         self.tokens = self._load_tokens()
@@ -126,25 +128,26 @@ class TokenAuth:
         now = datetime.now(UTC)
         window_size = 3600  # 1 hour in seconds
         
-        limit_data = self.rate_limits.get(token_id, {
-            'count': 0,
-            'window_start': now.timestamp()
-        })
-        
-        # Check if window has expired
-        if now.timestamp() - limit_data['window_start'] > window_size:
-            # Reset window
-            limit_data = {
+        with self._lock:
+            limit_data = self.rate_limits.get(token_id, {
                 'count': 0,
                 'window_start': now.timestamp()
-            }
-        
-        if limit_data['count'] >= token_info['rate_limit']:
-            raise ValueError("Rate limit exceeded")
-        
-        # Increment request count
-        limit_data['count'] += 1
-        self.rate_limits[token_id] = limit_data
+            })
+            
+            # Check if window has expired
+            if now.timestamp() - limit_data['window_start'] > window_size:
+                # Reset window
+                limit_data = {
+                    'count': 0,
+                    'window_start': now.timestamp()
+                }
+            
+            if limit_data['count'] >= token_info['rate_limit']:
+                raise ValueError("Rate limit exceeded")
+            
+            # Increment request count
+            limit_data['count'] += 1
+            self.rate_limits[token_id] = limit_data
         
         # Update last used timestamp
         token_info['last_used'] = datetime.now(UTC).isoformat()

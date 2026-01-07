@@ -4,11 +4,11 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 # Add server to path
-sys.path.insert(0, '/home/sshinn/src/chelon/server')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../server'))
 
 from auth import TokenAuth
 

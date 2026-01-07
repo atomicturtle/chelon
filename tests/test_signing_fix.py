@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 # Add server to path
-sys.path.insert(0, '/usr/share/chelon/server')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../server'))
 
 from signing_engine import SigningEngine
 import gnupg

@@ -10,7 +10,12 @@ import json
 from pathlib import Path
 
 # Add server directory to path
-sys.path.insert(0, '/usr/share/chelon/server')
+# Try local path first (dev environment), then fallback to installed path
+local_path = os.path.join(os.path.dirname(__file__), '../server')
+if os.path.isdir(local_path):
+    sys.path.insert(0, local_path)
+else:
+    sys.path.insert(0, '/usr/share/chelon/server')
 
 from auth import TokenAuth
 from audit import AuditLogger
