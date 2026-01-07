@@ -3,7 +3,6 @@ Signing Engine for Chelon
 Handles GPG signing operations using python-gnupg
 """
 
-import os
 import json
 import gnupg
 import logging
