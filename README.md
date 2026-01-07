@@ -195,7 +195,7 @@ To enable HTTPS and Mutual TLS (mTLS):
          https://chelon-server:5050/api/v1/health
     ```
 
-
+## File Locations
 | Path | Purpose |
 |------|---------|
 | `/etc/chelon/chelon.conf` | Configuration file |
