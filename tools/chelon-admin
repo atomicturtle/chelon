@@ -93,7 +93,7 @@ def view_audit(args):
                 if message.startswith('AUDIT_ENTRY: '):
                     audit_json = message[len('AUDIT_ENTRY: '):]
                     logs.append(json.loads(audit_json))
-            except Exception:
+            except json.JSONDecodeError:
                 continue
 
         # Limit to requested number
