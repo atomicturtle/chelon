@@ -22,7 +22,7 @@ class TestSigningFix(unittest.TestCase):
         # Generate a key
         input_data = self.gpg.gen_key_input(
             key_type="RSA",
-            key_length=1024,
+            key_length=2048,
             name_real="Test Key",
             name_email="test@example.com",
             no_protection=True
