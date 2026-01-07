@@ -92,6 +92,10 @@ chown -R chelon:chelon %{_localstatedir}/lib/%{name} 2>/dev/null || true
 %dir %attr(0750, root, chelon) %{_sysconfdir}/%{name}/
 
 %changelog
+* Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-2
+- Add binary data signing support
+- Update HTTP API endpoints and request/response formats
+- Introduce new client tools for interacting with the signing service
 * Tue Jan 06 2026 Atomicorp <support@atomicorp.com> - 1.0.0-1
 - Initial release as Chelon
 - Flask-based HTTP API for remote signing
