@@ -354,9 +354,6 @@ def main():
     elif args.command == 'audit':
         view_audit(args)
     elif args.command == 'keys':
-        if not args.key_command:
-            keys_parser.print_help()
-            return 1
         handle_keys_command(args)
     else:
         print(f"Unknown command: {args.command}")
