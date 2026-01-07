@@ -37,7 +37,8 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
-SystemCallFilter=@system-service
+# Allow additional syscalls needed for GPG/crypto operations (I/O, filesystem, network)
+SystemCallFilter=@system-service @basic-io @file-system @network-io
 
 [Install]
 WantedBy=multi-user.target
