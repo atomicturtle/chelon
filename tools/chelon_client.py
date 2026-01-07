@@ -91,7 +91,13 @@ class ChelonClient:
         req = urllib.request.Request(url, data=request_data, headers=headers, method='POST')
         
         # Setup SSL context
-        ssl_context = ssl.create_default_context(cafile=str(self.ca_cert) if self.verify_ssl else None)
+        if self.verify_ssl:
+            # When verifying SSL, use the provided CA certificate file
+            ssl_context = ssl.create_default_context(cafile=str(self.ca_cert))
+        else:
+            # When not verifying SSL, do not load a CA file
+            ssl_context = ssl.create_default_context()
+        
         ssl_context.load_cert_chain(certfile=str(self.client_cert), keyfile=str(self.client_key))
         
         if not self.verify_ssl:
