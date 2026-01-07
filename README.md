@@ -70,7 +70,6 @@ CHELON_PORT=5050
 GNUPGHOME=/var/lib/chelon/.gnupg
 
 # Logging
-# Logging
 LOG_LEVEL=INFO
 
 # Transport Security (HTTPS/mTLS)
