@@ -70,5 +70,15 @@ class TestSigningFix(unittest.TestCase):
             
             print("Verification successful!")
 
+    def test_sign_invalid_key_type(self):
+        engine = SigningEngine(gnupg_home=self.gpg_home)
+        data = b"Some data"
+        
+        with self.assertRaises(ValueError) as cm:
+            engine.sign_data(data, 'invalid_key_type')
+        
+        print(f"Caught expected error: {cm.exception}")
+        self.assertIn("Unknown key type", str(cm.exception))
+
 if __name__ == '__main__':
     unittest.main()

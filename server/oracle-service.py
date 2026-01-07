@@ -102,7 +102,11 @@ def _handle_signing(operation):
         except Exception as e:
             return jsonify({'error': f'Invalid Base64 data: {e}'}), 400
     elif package_hash or repodata_hash:
-        return jsonify({'error': 'Signing by hash is deprecated. Please provide base64 encoded "data".'}), 400
+        err_msg = (
+            'Signing by hash is deprecated. Please provide base64 encoded "data" field instead '
+            '(e.g., {"data": "base64_encoded_content", "key_type": "modern"})'
+        )
+        return jsonify({'error': err_msg}), 400
     else:
         return jsonify({'error': 'Missing "data" field (base64 encoded content required)'}), 400
     
