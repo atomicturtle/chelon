@@ -3,7 +3,6 @@ Audit logging for Chelon
 Tracks all signing operations for security and compliance
 """
 
-import os
 import json
 import logging
 from datetime import datetime, UTC
