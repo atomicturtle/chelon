@@ -3,12 +3,15 @@ Token-based authentication for Chelon
 """
 
 import os
+import sys
+import stat
 import json
 import logging
 import hashlib
 import secrets
 import pwd
 import grp
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime, UTC
@@ -22,12 +25,49 @@ class TokenAuth:
     def __init__(self, config_file: str = '/etc/chelon/chelon.conf'):
         """Initialize token auth"""
         self.config_file = Path(config_file)
-        self.tokens_file = Path('/var/lib/chelon/tokens.json')
-        self.rate_limits = {}  # token_id -> request count
+        
+        # Determine data directory from config
+        data_dir = '/var/lib/chelon'
+        if self.config_file.exists():
+            # Security check: verify config file permissions and ownership
+            try:
+                file_stat = self.config_file.stat()
+                mode = stat.S_IMODE(file_stat.st_mode)
+                # Check for world access (read/write/execute)
+                if mode & (stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH):
+                    logger.critical(f"Config file {self.config_file} is world-accessible ({oct(mode)}). ")
+                    logger.critical("Please secure it: chmod 600 or 640 " + str(self.config_file))
+                    sys.exit(1)
+                
+                # Check ownership - should be owned by root or chelon user
+                try:
+                    chelon_uid = pwd.getpwnam('chelon').pw_uid
+                except KeyError:
+                    chelon_uid = None
+                
+                if file_stat.st_uid not in (0, chelon_uid) if chelon_uid else file_stat.st_uid != 0:
+                    logger.critical(f"Config file {self.config_file} is owned by UID {file_stat.st_uid}, not root (0) or chelon user")
+                    logger.critical("Please fix ownership: chown root:chelon " + str(self.config_file))
+                    sys.exit(1)
+            except Exception as e:
+                logger.critical(f"Failed to perform security checks on config file {self.config_file}: {e}")
+                sys.exit(1)
+
+            try:
+                with open(self.config_file, 'r') as f:
+                    for line in f:
+                        if line.strip().startswith('DATA_DIR='):
+                            data_dir = line.split('=', 1)[1].strip()
+            except Exception as e:
+                logger.warning(f"Failed to read config {self.config_file}: {e}")
+        
+        self.tokens_file = Path(data_dir) / 'tokens.json'
+        self.rate_limits = {}  # token_id -> {'count': int, 'window_start': float}
+        self._lock = threading.Lock()
         
         # Load tokens
         self.tokens = self._load_tokens()
-        logger.info(f"Loaded {len(self.tokens)} tokens")
+        logger.info(f"Loaded {len(self.tokens)} tokens from {self.tokens_file}")
     
     def _load_tokens(self) -> Dict:
         """Load tokens from file"""
@@ -119,17 +159,33 @@ class TokenAuth:
         
         # Verify secret
         secret_hash = hashlib.sha256(secret.encode()).hexdigest()
-        if secret_hash != token_info['secret_hash']:
+        if not secrets.compare_digest(secret_hash, token_info['secret_hash']):
             raise ValueError("Invalid token secret")
         
-        # Check rate limit (simple implementation)
-        # TODO: Implement proper time-based rate limiting
-        request_count = self.rate_limits.get(token_id, 0)
-        if request_count >= token_info['rate_limit']:
-            raise ValueError("Rate limit exceeded")
+        # Check rate limit (Fixed Window)
+        now = datetime.now(UTC)
+        window_size = 3600  # 1 hour in seconds
         
-        # Increment request count
-        self.rate_limits[token_id] = request_count + 1
+        with self._lock:
+            limit_data = self.rate_limits.get(token_id, {
+                'count': 0,
+                'window_start': now.timestamp()
+            })
+            
+            # Check if window has expired
+            if now.timestamp() - limit_data['window_start'] > window_size:
+                # Reset window
+                limit_data = {
+                    'count': 0,
+                    'window_start': now.timestamp()
+                }
+            
+            if limit_data['count'] >= token_info['rate_limit']:
+                raise ValueError("Rate limit exceeded")
+            
+            # Increment request count
+            limit_data['count'] += 1
+            self.rate_limits[token_id] = limit_data
         
         # Update last used timestamp
         token_info['last_used'] = datetime.now(UTC).isoformat()

@@ -1,6 +1,6 @@
 NAME = chelon
 VERSION = 1.0.0
-RELEASE = 1
+RELEASE = 2
 
 .PHONY: all clean srpm rpm
 
@@ -47,4 +47,4 @@ deps:
 test-local:
 	@echo "Starting Chelon service locally on port 5050..."
 	@echo "Make sure GPG keys are imported first!"
-	cd server && python3 oracle-service.py
+	cd server && python3 chelon-service.py
