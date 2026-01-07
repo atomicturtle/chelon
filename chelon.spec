@@ -25,6 +25,9 @@ Requires(pre):  shadow-utils
 # Prevent auto-generated requires for user/group (we create them in %pre)
 %global __requires_exclude ^(user|group)\\(chelon\\)$
 
+Provides:       user(chelon)
+Provides:       group(chelon)
+
 %description
 Chelon is a secure remote signing service for RPM packages and repository
 metadata. Build servers send package hashes to Chelon via HTTPS API and
@@ -81,11 +84,12 @@ chown -R chelon:chelon %{_localstatedir}/lib/%{name} 2>/dev/null || true
 
 %files
 %doc README.md
-%{_datadir}/%{name}/
+%attr(0755, root, root) %{_datadir}/%{name}/
 %{_bindir}/chelon-admin
 %{_unitdir}/chelon.service
-%config(noreplace) %{_sysconfdir}/%{name}/chelon.conf
-%dir %{_localstatedir}/lib/%{name}
+%config(noreplace) %attr(0600, chelon, chelon) %{_sysconfdir}/%{name}/chelon.conf
+%dir %attr(0750, chelon, chelon) %{_localstatedir}/lib/%{name}
+%dir %attr(0750, root, chelon) %{_sysconfdir}/%{name}/
 
 %changelog
 * Tue Jan 06 2026 Atomicorp <support@atomicorp.com> - 1.0.0-1

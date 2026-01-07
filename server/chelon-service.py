@@ -19,6 +19,14 @@ from audit import AuditLogger
 
 app = Flask(__name__)
 
+# Setup logging (stdout only - journald will capture it)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
 # Configuration
 CONFIG_FILE = os.environ.get('CHELON_CONFIG', '/etc/chelon/chelon.conf')
 DATA_DIR = '/var/lib/chelon'
@@ -28,6 +36,19 @@ def load_config(path):
     config = {}
     if not os.path.exists(path):
         return config
+    
+    # Security check using stat
+    try:
+        st = os.stat(path)
+        # Check for world access (read/write/execute)
+        if st.st_mode & 0o007:
+            logger.critical(f"Config file {path} is world-accessible ({oct(st.st_mode & 0o777)}).")
+            logger.critical("Please secure it: chmod 600 or 640 " + path)
+            sys.exit(1)
+    except OSError as e:
+        logger.error(f"Error checking config permissions: {e}")
+        sys.exit(1)
+
     try:
         with open(path, 'r') as f:
             for line in f:
@@ -38,27 +59,17 @@ def load_config(path):
                     k, v = line.split('=', 1)
                     config[k.strip()] = v.strip()
     except Exception as e:
-        print(f"Error loading config: {e}")
+        logger.error(f"Error loading config: {e}")
     return config
 
 # Initialize components
 config = load_config(CONFIG_FILE)
 # Log config status
-lp = config.get('LEGACY_PASSPHRASE')
-mp = config.get('MODERN_PASSPHRASE')
-print(f"DEBUG: Config loaded. Legacy PP len: {len(lp) if lp else 0}, Modern PP len: {len(mp) if mp else 0}")
+logger.info("Configuration loaded successfully")
 
 signing_engine = SigningEngine()
 token_auth = TokenAuth(config_file=CONFIG_FILE)
 audit_logger = AuditLogger()
-
-# Setup logging (stdout only - journald will capture it)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
 
 
 def _handle_signing(operation):
@@ -88,6 +99,11 @@ def _handle_signing(operation):
         return jsonify({'error': 'Invalid JSON'}), 400
     
     raw_data_b64 = data.get('data') 
+    
+    # DoS Protection: Limit payload size
+    if raw_data_b64 and len(raw_data_b64) > 10 * 1024 * 1024:  # 10MB limit
+        return jsonify({'error': 'Payload too large (limit 10MB)'}), 413
+
     package_hash = data.get('package_hash')
     repodata_hash = data.get('repodata_hash')
     key_type = data.get('key_type', 'legacy')

@@ -4,6 +4,7 @@ Oracle Admin CLI Tool
 Manage tokens and view audit logs
 """
 
+import os
 import sys
 import argparse
 import json

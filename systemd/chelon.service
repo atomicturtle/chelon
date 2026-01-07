@@ -17,9 +17,27 @@ RestartSec=10
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
 ReadWritePaths=/var/lib/chelon
+
+# Network isolation
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Capability restriction
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+
+# Application sandboxing
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target
