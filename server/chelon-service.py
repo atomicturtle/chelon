@@ -268,18 +268,24 @@ if __name__ == '__main__':
 
     logger.info(f"Starting Chelon service on {host}:{port}")
 
-    # SSL Configuration
-    ssl_cert = os.environ.get('CHELON_SSL_CERT', config.get('CHELON_SSL_CERT'))
-    ssl_key = os.environ.get('CHELON_SSL_KEY', config.get('CHELON_SSL_KEY'))
-    ssl_ca = os.environ.get('CHELON_SSL_CA', config.get('CHELON_SSL_CA'))
-    verify_client = os.environ.get('CHELON_SSL_VERIFY_CLIENT', config.get('CHELON_SSL_VERIFY_CLIENT', 'false')).lower() == 'true'
-
+    # SSL/TLS Configuration
+    ssl_cert = os.environ.get('CHELON_SSL_CERT')
+    ssl_key = os.environ.get('CHELON_SSL_KEY')
+    ssl_ca = os.environ.get('CHELON_SSL_CA')
+    verify_client = os.environ.get('CHELON_VERIFY_CLIENT', 'false').lower() == 'true'
+    
     ssl_context = None
     if ssl_cert and ssl_key:
         if not os.path.exists(ssl_cert) or not os.path.exists(ssl_key):
             logger.error(f"SSL cert or key not found: {ssl_cert}, {ssl_key}")
             sys.exit(1)
-            
+        
+        # If verify_client is True, ssl_ca must be provided
+        if verify_client and not ssl_ca:
+            logger.error("CHELON_VERIFY_CLIENT is True but CHELON_SSL_CA is not provided")
+            logger.error("Cannot verify client certificates without a CA certificate")
+            sys.exit(1)
+        
         import ssl
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(ssl_cert, ssl_key)
@@ -289,12 +295,11 @@ if __name__ == '__main__':
                 logger.error(f"SSL CA not found: {ssl_ca}")
                 sys.exit(1)
             ssl_context.load_verify_locations(ssl_ca)
-            
             if verify_client:
                 ssl_context.verify_mode = ssl.CERT_REQUIRED
+                logger.info("mTLS enabled: Client certificate verification required")
             else:
                 ssl_context.verify_mode = ssl.CERT_OPTIONAL
-        
         logger.info(f"SSL Enabled. Client Verify: {verify_client}")
     
     app.run(host=host, port=port, debug=False, ssl_context=ssl_context)
