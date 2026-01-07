@@ -39,10 +39,14 @@ class TokenAuth:
                     logger.critical("Please secure it: chmod 600 or 640 " + str(self.config_file))
                     sys.exit(1)
                 
-                # Check ownership - should be owned by root or current user
-                current_uid = os.getuid()
-                if file_stat.st_uid not in (0, current_uid):
-                    logger.critical(f"Config file {self.config_file} is owned by UID {file_stat.st_uid}, not root (0) or current user ({current_uid})")
+                # Check ownership - should be owned by root or chelon user
+                try:
+                    chelon_uid = pwd.getpwnam('chelon').pw_uid
+                except KeyError:
+                    chelon_uid = None
+                
+                if file_stat.st_uid not in (0, chelon_uid) if chelon_uid else file_stat.st_uid != 0:
+                    logger.critical(f"Config file {self.config_file} is owned by UID {file_stat.st_uid}, not root (0) or chelon user")
                     logger.critical("Please fix ownership: chown root:chelon " + str(self.config_file))
                     sys.exit(1)
             except Exception as e:
