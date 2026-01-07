@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""
+Chelon Sign Repomd
+
+Sign RPM repository metadata files (repomd.xml) using Chelon service.
+Creates detached GPG signatures (.asc files).
+"""
+
+import os
+import sys
+import argparse
+from pathlib import Path
+
+# Add tools directory to path for chelon_client import
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from chelon_client import get_client, ChelonClientError
+
+
+def sign_repomd(repomd_path: str, output_path: Optional[str] = None, 
+                key_type: str = 'modern', verbose: bool = False) -> str:
+    """
+    Sign a repomd.xml file
+    
+    Args:
+        repomd_path: Path to repomd.xml file
+        output_path: Path for signature file (default: repomd_path + '.asc')
+        key_type: GPG key type to use
+        verbose: Print verbose output
+        
+    Returns:
+        Path to signature file
+    """
+    repomd_file = Path(repomd_path)
+    
+    if not repomd_file.exists():
+        raise FileNotFoundError(f"Repomd file not found: {repomd_path}")
+    
+    if output_path is None:
+        output_path = str(repomd_file) + '.asc'
+    
+    if verbose:
+        print(f"Signing: {repomd_path}")
+        print(f"Output: {output_path}")
+        print(f"Key type: {key_type}")
+    
+    # Get client
+    try:
+        client = get_client()
+    except ChelonClientError as e:
+        print(f"Error initializing client: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Sign the file
+    try:
+        if verbose:
+            print("Sending signing request...")
+        
+        response = client.sign_file(str(repomd_file), key_type=key_type, operation='repodata')
+        
+        if verbose:
+            print(f"✓ Signed successfully")
+            print(f"  Request ID: {response.get('request_id')}")
+            print(f"  Key ID: {response.get('key_id')}")
+            print(f"  Key Fingerprint: {response.get('key_fingerprint')}")
+        
+        # Write signature to file
+        signature = response['signature']
+        with open(output_path, 'w') as f:
+            f.write(signature)
+        
+        if verbose:
+            print(f"✓ Signature written to: {output_path}")
+        
+        return output_path
+        
+    except ChelonClientError as e:
+        print(f"Error signing file: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Sign RPM repository metadata using Chelon service',
+        epilog='Environment variables: CHELON_URL, CHELON_TOKEN, CHELON_CERT_DIR'
+    )
+    
+    parser.add_argument('repomd_file', help='Path to repomd.xml file')
+    parser.add_argument('-o', '--output', help='Output signature file (default: <repomd_file>.asc)')
+    parser.add_argument('-k', '--key-type', choices=['legacy', 'modern'], default='modern',
+                       help='GPG key type to use (default: modern)')
+    parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    # Set verify_ssl based on --insecure flag
+    if args.insecure:
+        os.environ['CHELON_VERIFY_SSL'] = 'false'
+    
+    try:
+        output_file = sign_repomd(
+            args.repomd_file,
+            output_path=args.output,
+            key_type=args.key_type,
+            verbose=args.verbose
+        )
+        
+        if not args.verbose:
+            print(output_file)
+        
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\nInterrupted", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

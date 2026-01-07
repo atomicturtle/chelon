@@ -8,6 +8,7 @@ import os
 import sys
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 # Add server directory to path
@@ -24,7 +25,7 @@ from audit import AuditLogger
 
 def generate_token(args):
     """Generate a new API token"""
-    auth = TokenAuth()
+    auth = TokenAuth(config_file=args.config)
     permissions = args.permissions.split(',')
     token = auth.generate_token(args.name, permissions, args.rate_limit)
     print(f"Generated token for '{args.name}':")
@@ -37,7 +38,7 @@ def generate_token(args):
 
 def list_tokens(args):
     """List all tokens"""
-    auth = TokenAuth()
+    auth = TokenAuth(config_file=args.config)
     tokens = auth.list_tokens()
     
     if not tokens:
@@ -55,29 +56,69 @@ def list_tokens(args):
 
 def revoke_token(args):
     """Revoke a token"""
-    auth = TokenAuth()
+    auth = TokenAuth(config_file=args.config)
     auth.revoke_token(args.name)
     print(f"Revoked token: {args.name}")
 
 
 def view_audit(args):
-    """View audit logs"""
-    audit = AuditLogger()
-    logs = audit.get_recent_logs(args.limit)
+    """View audit logs from journald"""
+    # Use journalctl to fetch logs
+    # -u chelon: Service unit
+    # -o json: Output as JSON stream
+    # -n limit: Limit number of lines (we fetch more and filter)
+    # We grep for AUDIT_ENTRY in the message since Python logging doesn't set syslog identifier
+    cmd = [
+        'journalctl',
+        '-u', 'chelon',
+        '-o', 'json',
+        '-n', str(args.limit * 10),  # Fetch more to account for non-audit logs
+        '--no-pager'
+    ]
     
-    if not logs:
-        print("No audit logs found")
-        return
-    
-    for log in logs:
-        status = "✓" if log['success'] else "✗"
-        print(f"{status} {log['timestamp']} | {log['token_id']} | {log['operation']} | {log['key_used']}")
-        if not log['success'] and 'error' in log:
-            print(f"  Error: {log['error']}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error fetching logs: {result.stderr}")
+            # Fallback (maybe not running as root or journald issue)
+            print("Tip: Ensure you are running with sufficient permissions (sudo) to read journal logs.")
+            return
+
+        logs = []
+        for line in result.stdout.splitlines():
+            try:
+                journal_entry = json.loads(line)
+                message = journal_entry.get('MESSAGE', '')
+                # Message format is "AUDIT_ENTRY: {json}"
+                if message.startswith('AUDIT_ENTRY: '):
+                    audit_json = message[len('AUDIT_ENTRY: '):]
+                    logs.append(json.loads(audit_json))
+            except Exception:
+                continue
+
+        # Limit to requested number
+        logs = logs[-args.limit:]
+
+        if not logs:
+            print("No audit logs found in journal")
+            return
+
+        for log in logs:
+            status = "✓" if log.get('success') else "✗"
+            print(f"{status} {log.get('timestamp')} | {log.get('token_id')} | {log.get('operation')} | {log.get('key_used', 'N/A')}")
+            if not log.get('success') and 'error' in log:
+                print(f"  Error: {log['error']}")
+                
+    except FileNotFoundError:
+        print("Error: 'journalctl' command not found. Is systemd installed?")
+    except Exception as e:
+        print(f"Error viewing audit logs: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser(description='Chelon Administration Tool')
+    parser.add_argument('--config', default=os.environ.get('CHELON_CONFIG', '/etc/chelon/chelon.conf'),
+                       help='Path to configuration file')
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
     
     # Generate token

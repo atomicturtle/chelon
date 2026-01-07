@@ -3,6 +3,7 @@ Audit logging for Chelon
 Tracks all signing operations for security and compliance
 """
 
+import os
 import json
 import logging
 from datetime import datetime, UTC
@@ -14,12 +15,11 @@ logger = logging.getLogger(__name__)
 class AuditLogger:
     """Audit logging for signing operations"""
     
-    def __init__(self, log_dir: str = '/var/lib/chelon'):
+    def __init__(self, config_file: str = None, log_dir: str = None):
         """Initialize audit logger"""
-        self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.audit_file = self.log_dir / 'audit.log'
-        logger.info(f"Audit logging to: {self.audit_file}")
+        # We use a specific logger for audit events so they can be filtered
+        self.logger = logging.getLogger('chelon.audit')
+        self.logger.info("Audit logger initialized (logging to journald/syslog)")
     
     def log_signing(self, token_id: str, operation: str, key_used: str,
                     data_hash: str, success: bool, client_ip: str,
@@ -59,24 +59,17 @@ class AuditLogger:
         if error:
             log_entry['error'] = error
         
-        # Write to audit log
-        try:
-            with open(self.audit_file, 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
-        except Exception as e:
-            logger.error(f"Failed to write audit log: {e}")
+        # Log to standard logging system with a prefix for easy grep
+        # Using comma separator for prefix to make it robust
+        self.logger.info(f"AUDIT_ENTRY: {json.dumps(log_entry)}")
     
     def get_recent_logs(self, limit: int = 100) -> list:
-        """Get recent audit log entries"""
-        if not self.audit_file.exists():
-            return []
-        
-        logs = []
-        try:
-            with open(self.audit_file, 'r') as f:
-                for line in f:
-                    logs.append(json.loads(line.strip()))
-        except Exception as e:
-            logger.error(f"Failed to read audit log: {e}")
-        
-        return logs[-limit:]
+        """
+        Get recent audit log entries
+        Deprecated for direct file access. Returns empty list.
+        Consumers should use journalctl.
+        """
+        # This function is now deprecated in favor of journalctl
+        # We return empty here to avoid breaking callers instantly, 
+        # but the admin tool will be updated to fetch from journal.
+        return []
