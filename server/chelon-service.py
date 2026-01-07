@@ -150,6 +150,7 @@ def _handle_signing(operation):
     payload_size = len(raw_data_b64) if raw_data_b64 else 0
     
     # DoS Protection: Limit payload size
+    # 10MB limit on actual decoded data (not base64-encoded size)
     if raw_data_b64 and payload_size > 10 * 1024 * 1024:  # 10MB limit
         latency = time.time() - start_time
         audit_logger.log_signing(
@@ -164,7 +165,7 @@ def _handle_signing(operation):
             payload_size=payload_size,
             error='Payload too large'
         )
-        return jsonify({'error': 'Payload too large (limit 10MB)', 'request_id': request_id}), 413
+        return jsonify({'error': f'Payload too large (decoded size: {payload_size} bytes, limit: 10MB)', 'request_id': request_id}), 413
 
     if not raw_data_b64:
         return jsonify({'error': 'Missing "data" field', 'request_id': request_id}), 400
