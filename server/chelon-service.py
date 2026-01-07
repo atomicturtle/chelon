@@ -11,7 +11,6 @@ import logging
 import hashlib
 from datetime import datetime, UTC
 from flask import Flask, request, jsonify
-from pathlib import Path
 import base64
 
 # Import our modules
