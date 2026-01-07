@@ -5,10 +5,11 @@ Chelon is a secure remote signing service for RPM packages and repository metada
 ## Features
 
 - **Remote Signing**: Build servers never touch private keys
-- **Dual Key Support**: Separate keys for legacy (EL5-8) and modern (EL9+) distributions
+- **Dynamic Key Configuration**: Manage signing keys via admin tool without code changes
 - **Token Authentication**: Secure API access with rate limiting
 - **Audit Logging**: All signing operations logged for compliance
 - **Systemd Integration**: Runs as unprivileged service with journald logging
+- **mTLS Support**: Optional mutual TLS for enhanced security
 
 ## Installation
 
@@ -29,7 +30,39 @@ sudo -u chelon gpg --import /path/to/modern_key.asc
 sudo -u chelon gpg --list-keys
 ```
 
-### 2. Generate API Token
+### 2. Configure Keys
+
+Chelon uses a JSON configuration file to manage signing keys. You must configure at least one key before the service will start.
+
+```bash
+# Add your legacy key
+sudo chelon-admin keys add legacy 4520AFA9 \
+  --description "Legacy signing key for EL7/EL8"
+
+# Add your modern key  
+sudo chelon-admin keys add modern CB2C73F04F3BE076 \
+  --description "Modern signing key for EL9+"
+
+# Set the default key
+sudo chelon-admin keys set-default modern
+
+# List configured keys
+sudo chelon-admin keys list
+```
+
+**Output:**
+```
+Name                 Key ID               Status     Default    Description
+------------------------------------------------------------------------------------------
+legacy               4520AFA9             enabled               Legacy signing key for EL7/EL8
+modern               CB2C73F04F3BE076     enabled    ✓          Modern signing key for EL9+
+```
+
+> [!IMPORTANT]
+> The service will not start without a configured `keys.json` file.
+> Use `chelon-admin keys add` to configure your GPG keys.
+
+### 3. Generate API Token
 
 ```bash
 # Create a token for your build server
@@ -40,14 +73,14 @@ sudo chelon-admin generate-token runner-gamera \
 # Save the output token securely!
 ```
 
-### 3. Start Service
+### 4. Start Service
 
 ```bash
 sudo systemctl enable --now chelon
 sudo systemctl status chelon
 ```
 
-### 4. Test the Service
+### 5. Test the Service
 
 ```bash
 # Health check
