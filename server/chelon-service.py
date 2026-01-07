@@ -230,11 +230,9 @@ def _handle_signing(operation):
     sign_target = None
     data_id = None
 
-    try:
-        sign_target = base64.b64decode(raw_data_b64)
-        data_id = hashlib.sha256(sign_target).hexdigest() # Properly hash the content for audit
-    except Exception as e:
-        return jsonify({'error': f'Invalid Base64 data: {e}', 'request_id': request_id}), 400
+    # Reuse already-decoded payload instead of decoding again
+    sign_target = raw_data
+    data_id = hashlib.sha256(sign_target).hexdigest()  # Properly hash the content for audit
     
     # Sign the data
     try:
