@@ -25,9 +25,9 @@ done
 
 # Check for client certificates
 CERT_DIR="${HOME}/.chelon/certs"
-if [ ! -f "$CERT_DIR/client.crt" ] || [ ! -f "$CERT_DIR/client.key" ] || [ ! -f "$CERT_DIR/ca.crt" ]; then
+if [ ! -f "$CERT_DIR/chelon_client.crt" ] || [ ! -f "$CERT_DIR/chelon_client.key" ] || [ ! -f "$CERT_DIR/chelon_ca.crt" ]; then
     echo "Error: Client certificates not found in $CERT_DIR"
-    echo "Expected files: client.crt, client.key, ca.crt"
+    echo "Expected files: chelon_client.crt, chelon_client.key, chelon_ca.crt"
     exit 1
 fi
 
@@ -60,9 +60,9 @@ EOF
 echo ""
 echo "Sending signing request..."
 RESPONSE=$(curl -s -k \
-    --cert "$CERT_DIR/client.crt" \
-    --key "$CERT_DIR/client.key" \
-    --cacert "$CERT_DIR/ca.crt" \
+    --cert "$CERT_DIR/chelon_client.crt" \
+    --key "$CERT_DIR/chelon_client.key" \
+    --cacert "$CERT_DIR/chelon_ca.crt" \
     -X POST "https://$CHELON_HOST:$CHELON_PORT/api/v1/sign/rpm" \
     -H "Authorization: Bearer $CHELON_TOKEN" \
     -H "Content-Type: application/json" \
