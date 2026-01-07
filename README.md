@@ -160,13 +160,12 @@ sudo journalctl -u chelon -n 100
 - Tokens hashed with SHA-256
 - Rate limiting prevents abuse
 - All operations logged to audit trail
-- Rate limiting prevents abuse
-- All operations logged to audit trail
 
 ## Transport Security (HTTPS/mTLS)
 
 To enable HTTPS and Mutual TLS (mTLS):
 
+To enable HTTPS and Mutual TLS (mTLS):
 1.  **Generate Certificates**: Creating a CA, Server, and Client certificate.
     ```bash
     # Create directory for certs
