@@ -113,7 +113,7 @@ class ChelonClient:
             try:
                 error_data = json.loads(error_body)
                 error_msg = error_data.get('error', str(e))
-            except:
+            except json.JSONDecodeError:
                 error_msg = error_body or str(e)
             raise ChelonClientError(f"HTTP {e.code}: {error_msg}")
         except urllib.error.URLError as e:
