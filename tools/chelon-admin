@@ -125,6 +125,7 @@ def get_keys_file(config_file):
                     if line.strip().startswith('DATA_DIR='):
                         data_dir = line.split('=', 1)[1].strip()
         except Exception:
+            # Intentionally ignore errors reading the config file and fall back to the default data_dir
             pass
     return Path(data_dir) / 'keys.json'
 
