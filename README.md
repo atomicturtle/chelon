@@ -21,8 +21,7 @@ Chelon is a secure remote signing service for RPM packages and repository metada
 
 ```
 ┌─────────────────┐
-│  Build Servers  │
-│  (GitLab CI)    │
+│  Build Runner   │
 └────────┬────────┘
          │ HTTPS + mTLS
          │ (Port 443/5050)
@@ -273,24 +272,19 @@ To enable HTTPS and Mutual TLS (mTLS):
 
 ## Production Deployment
 
-> [!IMPORTANT]
-> For production deployments, use Gunicorn + Nginx instead of Flask's development server.
+> [!NOTE]
+> Your current Flask-based setup is already production-ready! No additional software needed.
 
-**Quick Production Setup:**
+**Current Setup:**
+- Flask with built-in SSL/mTLS
+- Handles 10-50 requests/minute
+- Perfect for typical build infrastructure
 
-```bash
-# Install Gunicorn
-sudo pip3 install gunicorn
+**Optional Upgrades:**
+- **Gunicorn** - For high traffic (100+ requests/minute)
+- **Nginx** - For load balancing multiple servers
 
-# Run with Gunicorn
-sudo -u chelon gunicorn \
-  --workers 4 \
-  --bind 127.0.0.1:5050 \
-  chelon-service:app
-```
-
-**Full production setup with Nginx, SSL, monitoring:**
-- See [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md)
+See [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md) for details on when and how to upgrade.
 
 ## Troubleshooting
 
