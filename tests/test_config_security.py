@@ -54,8 +54,8 @@ class TestConfigSecurity(unittest.TestCase):
         # Checking if import triggers exit
         try:
              self.load_service_module()
-        except Exception:
-            pass
+        except Exception as exc:
+            self.fail(f"Unexpected exception during service module load: {exc}")
             
         # Should call exit(1) during module load
         mock_exit.assert_called_with(1)
