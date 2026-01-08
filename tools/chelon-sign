@@ -283,8 +283,12 @@ def sign_file_detached(file_path: str, output_path: Optional[str] = None,
         client = get_client()
         response = client.sign_file(str(target_file), key_type=key_type, operation=operation)
         
-        with open(output_path, 'w') as f:
-            f.write(response['signature'])
+        try:
+            with open(output_path, 'w') as f:
+                f.write(response['signature'])
+        except OSError as e:
+            print(f"Error writing signature to '{output_path}': {e}", file=sys.stderr)
+            sys.exit(1)
         
         if verbose:
             print(f"✓ Signed successfully")
