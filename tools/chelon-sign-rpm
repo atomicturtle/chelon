@@ -10,7 +10,6 @@ import os
 import sys
 import argparse
 import subprocess
-import tempfile
 import base64
 from pathlib import Path
 from typing import Optional, List
@@ -29,6 +28,21 @@ except ImportError:
         sys.exit(1)
 
 
+def get_gpg_version() -> str:
+    """
+    Get the version of the system gpg command.
+    Returns a generic version if gpg is not found.
+    """
+    try:
+        result = subprocess.run(['gpg', '--version'], capture_output=True, text=True, check=True)
+        first_line = result.stdout.splitlines()[0]
+        if 'gpg (GnuPG)' in first_line:
+            return first_line.split()[-1]
+    except (subprocess.CalledProcessError, FileNotFoundError, IndexError):
+        pass
+    return "2.4.4"
+
+
 def gpg_mode(args: List[str]):
     """
     Emulate GPG behavior when called by rpmsign.
@@ -37,35 +51,57 @@ def gpg_mode(args: List[str]):
     """
     output_file = None
     input_file = "-"
-    key_id = None
     
     # Simple argument parser for GPG flags
     i = 0
     while i < len(args):
         arg = args[i]
         if arg in ('-o', '--output'):
-            output_file = args[i+1]
-            i += 2
+            if i + 1 < len(args):
+                output_file = args[i+1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
         elif arg == '-sbo':
-            output_file = args[i+1]
-            i += 2
+            if i + 1 < len(args):
+                output_file = args[i+1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
         elif arg == '-u':
-            key_id = args[i+1]
-            i += 2
+            if i + 1 < len(args):
+                # key_id is parsed but we currently rely on environment variable CHELON_KEY_TYPE
+                # as per the wrapper logic, but we should at least parse it correctly.
+                # key_id = args[i+1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
         elif arg == '--':
             if i + 1 < len(args):
                 input_file = args[i+1]
             break
         elif arg == '--version':
-            print("gpg (GnuPG) 2.4.5")
+            version = get_gpg_version()
+            print(f"gpg (GnuPG) {version}")
             sys.exit(0)
         else:
             i += 1
             
-    # Read input data
+    # Read input data with a 10MB limit (DoS protection)
+    MAX_INPUT_SIZE = 10 * 1024 * 1024  # 10MB
     if input_file == "-":
-        data = sys.stdin.buffer.read()
+        data = sys.stdin.buffer.read(MAX_INPUT_SIZE + 1)
+        if len(data) > MAX_INPUT_SIZE:
+            print(f"Error: Input data from stdin exceeds limit of {MAX_INPUT_SIZE} bytes", file=sys.stderr)
+            sys.exit(1)
     else:
+        file_size = os.path.getsize(input_file)
+        if file_size > MAX_INPUT_SIZE:
+            print(f"Error: Input file too large ({file_size} bytes)", file=sys.stderr)
+            sys.exit(1)
         with open(input_file, 'rb') as f:
             data = f.read()
             
@@ -84,23 +120,58 @@ def gpg_mode(args: List[str]):
         is_armored = '--armor' in args or '-a' in args
         
         if output_file and output_file != '-':
-            with open(output_file, 'w' if is_armored else 'wb') as f:
+            try:
                 if is_armored:
-                    f.write(signature)
+                    with open(output_file, 'w') as f:
+                        f.write(signature)
                 else:
                     # Strip headers and decode if binary expected
-                    # Simplified: just dearmor using gpg if available, or just write as is if armored
                     if signature.startswith('-----BEGIN'):
                         # Need to dearmor
-                        proc = subprocess.Popen(['gpg', '--dearmor'], stdin=subprocess.PIPE, stdout=f)
-                        proc.communicate(input=signature.encode('utf-8'))
+                        try:
+                            result = subprocess.run(
+                                ['gpg', '--dearmor'],
+                                input=signature.encode('utf-8'),
+                                capture_output=True,
+                                check=True
+                            )
+                            with open(output_file, 'wb') as f:
+                                f.write(result.stdout)
+                        except subprocess.CalledProcessError as e:
+                            print(f"Error: Failed to dearmor signature: {e.stderr.decode()}", file=sys.stderr)
+                            sys.exit(1)
+                        except FileNotFoundError:
+                            print("Error: 'gpg' command not found. Please install GnuPG to handle armored signatures in binary mode.", file=sys.stderr)
+                            sys.exit(1)
                     else:
-                        f.write(base64.b64decode(signature))
+                        with open(output_file, 'wb') as f:
+                            f.write(base64.b64decode(signature))
+            except IOError as e:
+                print(f"Error writing to {output_file}: {e}", file=sys.stderr)
+                sys.exit(1)
         else:
             if is_armored:
                 sys.stdout.write(signature)
+                sys.stdout.flush()
             else:
-                sys.stdout.buffer.write(base64.b64decode(signature))
+                if signature.startswith('-----BEGIN'):
+                    try:
+                        result = subprocess.run(
+                            ['gpg', '--dearmor'],
+                            input=signature.encode('utf-8'),
+                            capture_output=True,
+                            check=True
+                        )
+                        sys.stdout.buffer.write(result.stdout)
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error: Failed to dearmor signature: {e.stderr.decode()}", file=sys.stderr)
+                        sys.exit(1)
+                    except FileNotFoundError:
+                        print("Error: 'gpg' command not found.", file=sys.stderr)
+                        sys.exit(1)
+                else:
+                    sys.stdout.buffer.write(base64.b64decode(signature))
+                sys.stdout.buffer.flush()
                 
     except Exception as e:
         print(f"GPG Emulation Error: {e}", file=sys.stderr)
@@ -109,7 +180,7 @@ def gpg_mode(args: List[str]):
     sys.exit(0)
 
 
-def resign_rpm(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
+def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
     """
     Embed signature into RPM using rpmsign and self as wrapper.
     """
@@ -124,11 +195,12 @@ def resign_rpm(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
     key_id = key_ids.get(key_type, key_type)
     
     if verbose:
-        print(f"Resigning RPM: {rpm_file}")
+        print(f"Integrated Signing: {rpm_file}")
         print(f"Using Key: {key_type} ({key_id})")
         
-    # Set environment for the wrapper call
-    os.environ['CHELON_KEY_TYPE'] = key_type
+    # Prepare environment for the wrapper call
+    new_env = os.environ.copy()
+    new_env['CHELON_KEY_TYPE'] = key_type
     
     cmd = [
         'rpmsign',
@@ -139,12 +211,18 @@ def resign_rpm(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
     ]
     
     try:
-        result = subprocess.run(cmd, check=True, capture_output=not verbose, text=True)
+        subprocess.run(cmd, check=True, capture_output=not verbose, text=True, env=new_env)
         if verbose:
             print("✓ Signature embedded successfully")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Error during rpmsign: {e.stderr if e.stderr else e}", file=sys.stderr)
+        error_msg = e.stderr.strip() if e.stderr else str(e)
+        if not error_msg and not verbose:
+            error_msg = "rpmsign failed (check system logs or run with --verbose)"
+        print(f"Error during integrated signing: {error_msg}", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"Unexpected error during integrated signing: {e}", file=sys.stderr)
         return False
 
 
@@ -183,11 +261,14 @@ def sign_rpm_detached(rpm_path: str, output_path: Optional[str] = None,
 
 def main():
     # Detect if we are being called as a GPG wrapper
-    # rpmsign usually calls with a lot of flags, first one is often --no-verbose
+    # rpmsign usually calls with a lot of flags, including -sbo or --detach-sign
     if len(sys.argv) > 1 and sys.argv[1].startswith('--'):
-        # Check if it looks like a GPG call (batch, detach-sign, etc)
-        gpg_flags = {'--version', '--batch', '-sbo', '--detach-sign', '--armor', '-u'}
+        # Check if it looks specifically like a GPG call from rpmsign
+        gpg_flags = {'-sbo', '--detach-sign', '--armor', '--no-secmem-warning'}
         if any(arg in gpg_flags for arg in sys.argv):
+            gpg_mode(sys.argv[1:])
+        elif '--version' in sys.argv and len(sys.argv) == 2:
+            # Handle standalone --version for discovery tools
             gpg_mode(sys.argv[1:])
 
     parser = argparse.ArgumentParser(
@@ -210,7 +291,7 @@ def main():
     
     try:
         if args.resign:
-            success = resign_rpm(args.rpm_file, key_type=args.key_type, verbose=args.verbose)
+            success = sign_rpm_integrated(args.rpm_file, key_type=args.key_type, verbose=args.verbose)
             return 0 if success else 1
         else:
             output_file = sign_rpm_detached(
@@ -224,6 +305,7 @@ def main():
             return 0
             
     except KeyboardInterrupt:
+        print("\nInterrupted by user", file=sys.stderr)
         return 130
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

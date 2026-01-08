@@ -369,6 +369,7 @@ if __name__ == '__main__':
     ssl_ca = config.get('CHELON_SSL_CA') or os.environ.get('CHELON_SSL_CA')
     
     # Support both names for backward compatibility/consistency
+    # Precedence: config['CHELON_SSL_VERIFY_CLIENT'] > config['CHELON_VERIFY_CLIENT'] > env['CHELON_VERIFY_CLIENT']
     verify_client_val = (config.get('CHELON_SSL_VERIFY_CLIENT') or 
                          config.get('CHELON_VERIFY_CLIENT') or 
                          os.environ.get('CHELON_VERIFY_CLIENT', 'false'))
