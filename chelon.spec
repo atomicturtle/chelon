@@ -1,6 +1,6 @@
 Name:           chelon
 Version:        1.0.0
-Release:        6%{?dist}
+Release:        7%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
@@ -83,7 +83,8 @@ install -m 755 tools/chelon-admin %{buildroot}%{_bindir}/
 
 # Install client tools
 install -m 755 tools/chelon-sign %{buildroot}%{_bindir}/
-install -m 644 tools/chelon_client.py %{buildroot}%{_datadir}/%{name}/client/
+install -d %{buildroot}%{python3_sitelib}
+install -m 644 tools/chelon_client.py %{buildroot}%{python3_sitelib}/
 
 # Install systemd unit
 install -m 644 systemd/chelon.service %{buildroot}%{_unitdir}/
@@ -133,9 +134,13 @@ fi
 %files client
 %doc README.md
 %{_bindir}/chelon-sign
-%{_datadir}/%{name}/client/
+%{python3_sitelib}/chelon_client.py
+%{python3_sitelib}/__pycache__/
 
 %changelog
+* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-7
+- Fix: Ensure chelon_client.py is installed to site-packages (spec file fix)
+
 * Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-6
 - Move chelon_client.py to site-packages for standard import resolution
 
