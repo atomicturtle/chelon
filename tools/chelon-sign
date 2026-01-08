@@ -204,6 +204,9 @@ def gpg_mode(args: List[str]):
                         sys.exit(1)
                 sys.stdout.buffer.flush()
                 
+    except ChelonClientError as e:
+        print(f"GPG Emulation Error (signing service): {e}", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"GPG Emulation Error: {e}", file=sys.stderr)
         sys.exit(1)
