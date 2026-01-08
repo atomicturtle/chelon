@@ -39,18 +39,18 @@ scp /etc/chelon/certs/chelon_ca.crt ~/.chelon/certs/
 
 ```bash
 # Sign a single RPM (detached signature)
-chelon-sign-rpm package.rpm
+chelon-sign package.rpm
 
 # Embed signature into RPM header (Integrated Signing)
 # This allows 'rpm -K' to work natively
-chelon-sign-rpm --resign package.rpm
+chelon-sign --resign package.rpm
 
 # Specify key type
-chelon-sign-rpm --key-type legacy package.rpm
+chelon-sign --key-type legacy package.rpm
 
 # Sign multiple RPMs
 for rpm in *.rpm; do
-    chelon-sign-rpm "$rpm"
+    chelon-sign "$rpm"
 done
 ```
 
@@ -75,11 +75,14 @@ Signature saved to: /tmp/tmp.xyz123
 ### Sign Repository Metadata
 
 ```bash
-# Sign repomd.xml
-chelon-sign-repomd repodata/repomd.xml
+# Sign repomd.xml (auto-detects type)
+chelon-sign repodata/repomd.xml
+
+# Explicitly specify type
+chelon-sign --type repodata repodata/repomd.xml
 
 # Specify key type
-chelon-sign-repomd --key-type modern repodata/repomd.xml
+chelon-sign --key-type modern repodata/repomd.xml
 ```
 
 **Output:**
@@ -226,11 +229,11 @@ sign_packages:
     
     # Sign all RPMs
     - for rpm in dist/*.rpm; do
-        chelon-sign-rpm "$rpm"
+        chelon-sign "$rpm"
       done
     
     # Sign repository metadata
-    - chelon-sign-repomd dist/repodata/repomd.xml
+    - chelon-sign dist/repodata/repomd.xml
 ```
 
 ### Makefile Example
@@ -241,10 +244,10 @@ RPMS := $(wildcard dist/*.rpm)
 sign: $(RPMS)
 	@for rpm in $(RPMS); do \
 		echo "Signing $$rpm..."; \
-		chelon-sign-rpm $$rpm || exit 1; \
+		chelon-sign $$rpm || exit 1; \
 	done
 	@echo "Signing repository metadata..."
-	@chelon-sign-repomd dist/repodata/repomd.xml
+	@chelon-sign dist/repodata/repomd.xml
 
 .PHONY: sign
 ```
@@ -261,13 +264,13 @@ CHELON_TOKEN="${CHELON_TOKEN:?CHELON_TOKEN not set}"
 # Sign all RPMs in directory
 for rpm in "$1"/*.rpm; do
     echo "Signing: $rpm"
-    chelon-sign-rpm "$rpm"
+    chelon-sign "$rpm"
 done
 
 # Sign repository metadata
 if [ -f "$1/repodata/repomd.xml" ]; then
     echo "Signing repository metadata"
-    chelon-sign-repomd "$1/repodata/repomd.xml"
+    chelon-sign "$1/repodata/repomd.xml"
 fi
 
 echo "All packages signed successfully"
@@ -312,10 +315,10 @@ curl -k https://gamera:5050/api/v1/keys
 
 ```bash
 # Modern key (default)
-chelon-sign-rpm package.rpm
+chelon-sign package.rpm
 
 # Legacy key (explicit)
-chelon-sign-rpm --key-type legacy package.rpm
+chelon-sign --key-type legacy package.rpm
 ```
 
 ---
@@ -422,7 +425,7 @@ sudo firewall-cmd --list-all | grep 5050
 # Sign all RPMs in parallel (careful with rate limits)
 
 find dist/ -name "*.rpm" | \
-  xargs -P 4 -I {} chelon-sign-rpm {}
+  xargs -P 4 -I {} chelon-sign {}
 ```
 
 ### Conditional Signing
@@ -430,7 +433,7 @@ find dist/ -name "*.rpm" | \
 ```bash
 # Only sign if not already signed
 if ! rpm -K package.rpm | grep -q "pgp"; then
-    chelon-sign-rpm package.rpm
+    chelon-sign package.rpm
 fi
 ```
 
