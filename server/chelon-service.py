@@ -359,7 +359,7 @@ if __name__ == '__main__':
     # Run the Flask app
     # Prioritize config file over environment variables
     host = config.get('CHELON_HOST') or os.environ.get('CHELON_HOST', '127.0.0.1')
-    port = int(config.get('CHELON_PORT') or os.environ.get('CHELON_PORT', 5050))
+    port = int(config.get('CHELON_PORT') or os.environ.get('CHELON_PORT') or 5050)
 
     logger.info(f"Starting Chelon service on {host}:{port}")
 
