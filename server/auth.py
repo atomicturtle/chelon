@@ -162,9 +162,6 @@ class TokenAuth:
                     if token_id not in self.tokens:
                         raise ValueError(f"Unknown token after reload: {token_id}")
         
-        if token_id not in self.tokens:
-            raise ValueError(f"Unknown token: {token_id}")
-        
         token_info = self.tokens[token_id]
         
         # Verify secret
