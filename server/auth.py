@@ -12,6 +12,7 @@ import secrets
 import pwd
 import grp
 import threading
+import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime, UTC
@@ -83,23 +84,47 @@ class TokenAuth:
             return {}
     
     def _save_tokens(self):
-        """Save tokens to file"""
+        """Save tokens to file atomically to prevent corruption"""
         try:
             self.tokens_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.tokens_file, 'w') as f:
-                json.dump(self.tokens, f, indent=2)
-            # Secure permissions
-            self.tokens_file.chmod(0o600)
             
-            # If running as root, try to chown to chelon user
-            if os.getuid() == 0:
+            # Write to temporary file first (atomic rename requires same filesystem)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=self.tokens_file.parent,
+                prefix='.tokens.json.',
+                suffix='.tmp'
+            )
+            
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(self.tokens, f, indent=2)
+                
+                # Set secure permissions before moving
+                os.chmod(tmp_path, 0o600)
+                
+                # If running as root, try to chown to chelon user
+                if os.getuid() == 0:
+                    try:
+                        uid = pwd.getpwnam('chelon').pw_uid
+                        gid = grp.getgrnam('chelon').gr_gid
+                        os.chown(tmp_path, uid, gid)
+                    except KeyError:
+                        # User or group doesn't exist, ignore
+                        pass
+                
+                # Atomic rename (POSIX guarantees atomicity)
+                os.rename(tmp_path, self.tokens_file)
+                
+            except Exception:
+                # Clean up temp file on error
                 try:
-                    uid = pwd.getpwnam('chelon').pw_uid
-                    gid = grp.getgrnam('chelon').gr_gid
-                    os.chown(self.tokens_file, uid, gid)
-                except KeyError:
-                    # User or group doesn't exist, ignore
+                    os.unlink(tmp_path)
+                except OSError:
+                    # Temp file may have already been deleted or be inaccessible
+                    # Safe to ignore - we're already handling the original error
                     pass
+                raise
+                
         except Exception as e:
             logger.error(f"Failed to save tokens: {e}")
     
