@@ -222,12 +222,8 @@ def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool =
     rpm_file = Path(rpm_path).absolute()
     script_path = Path(__file__).absolute()
     
-    # Map key_type to standard Atomicorp Key IDs if not provided
-    key_ids = {
-        'legacy': '4520AFA9',
-        'modern': 'CB2C73F04F3BE076'
-    }
-    key_id = key_ids.get(key_type, key_type)
+    # Use the provided key type/name directly as the key ID
+    key_id = key_type
     
     if verbose:
         print(f"Integrated Signing: {rpm_file}")
@@ -325,8 +321,8 @@ def main():
                        help='Signing type (default: guess from extension or "rpm")')
     parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign, implies --type rpm)')
     parser.add_argument('-o', '--output', help='Output signature file (default: <file>.asc, only for detached)')
-    parser.add_argument('-k', '--key-type', choices=['legacy', 'modern'], default='modern',
-                       help='GPG key type to use (default: modern)')
+    parser.add_argument('-k', '--key-type', '--key-name', dest='key_type', default='modern',
+                       help='GPG key name/type (default: modern)') # --key-name is alias
     parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
     
