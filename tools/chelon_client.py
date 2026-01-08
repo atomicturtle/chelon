@@ -66,7 +66,8 @@ class ChelonClient:
             if alt_cert.exists() and alt_key.exists():
                 self.client_cert = alt_cert
                 self.client_key = alt_key
-                self.ca_cert = alt_ca
+                if alt_ca.exists():
+                    self.ca_cert = alt_ca
             else:
                 raise ChelonClientError(f"Client certificate not found: {self.client_cert}")
         

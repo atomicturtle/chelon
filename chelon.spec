@@ -82,8 +82,7 @@ install -m 644 server/audit.py %{buildroot}%{_datadir}/%{name}/server/
 install -m 755 tools/chelon-admin %{buildroot}%{_bindir}/
 
 # Install client tools
-install -m 755 tools/chelon-sign-rpm %{buildroot}%{_bindir}/
-install -m 755 tools/chelon-sign-repomd %{buildroot}%{_bindir}/
+install -m 755 tools/chelon-sign %{buildroot}%{_bindir}/
 install -m 644 tools/chelon_client.py %{buildroot}%{_datadir}/%{name}/client/
 
 # Install systemd unit
@@ -133,11 +132,17 @@ fi
 
 %files client
 %doc README.md
-%{_bindir}/chelon-sign-rpm
-%{_bindir}/chelon-sign-repomd
+%{_bindir}/chelon-sign
 %{_datadir}/%{name}/client/
 
 %changelog
+* Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-3
+- Consolidate chelon-sign-rpm and chelon-sign-repomd into chelon-sign
+- Security: Sanitize script paths in RPM macros
+- Security: Optimize DoS protection with chunked reading
+- Fix: Add error handling for malformed base64 signatures
+- Fix: Improve client certificate fallback logic
+
 * Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-2
 - Split into server and client subpackages
 - Add client signing tools (chelon-sign-rpm, chelon-sign-repomd)

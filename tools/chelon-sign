@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Chelon Sign RPM
+Chelon Sign (Unified Client)
 
-Sign RPM packages using Chelon service.
-Supports creating detached signatures (.asc) and embedding signatures via rpmsign integration.
+Signs files using the Chelon service.
+Supports:
+- RPM packages (detached signatures or embedded via rpmsign)
+- Repository metadata (repomd.xml)
+- GPG emulation for rpmsign integration
 """
 
 import os
@@ -11,6 +14,8 @@ import sys
 import argparse
 import subprocess
 import base64
+import shlex
+import binascii
 from pathlib import Path
 from typing import Optional, List
 
@@ -93,10 +98,28 @@ def gpg_mode(args: List[str]):
     # Read input data with a 10MB limit (DoS protection)
     MAX_INPUT_SIZE = 10 * 1024 * 1024  # 10MB
     if input_file == "-":
-        data = sys.stdin.buffer.read(MAX_INPUT_SIZE + 1)
-        if len(data) > MAX_INPUT_SIZE:
-            print(f"Error: Input data from stdin exceeds limit of {MAX_INPUT_SIZE} bytes", file=sys.stderr)
-            sys.exit(1)
+        # Read stdin in chunks to avoid buffering MAX_INPUT_SIZE+1 bytes unconditionally
+        MAX_CHUNK_SIZE = 64 * 1024  # 64KB
+        data_buf = bytearray()
+        stdin_buffer = sys.stdin.buffer
+        
+        while True:
+            # Limit each read to the remaining allowed bytes plus one extra for overflow detection
+            remaining = (MAX_INPUT_SIZE + 1) - len(data_buf)
+            if remaining <= 0:
+                break
+                
+            chunk = stdin_buffer.read(min(MAX_CHUNK_SIZE, remaining))
+            if not chunk:
+                break
+                
+            data_buf.extend(chunk)
+            
+            if len(data_buf) > MAX_INPUT_SIZE:
+                print(f"Error: Input data from stdin exceeds limit of {MAX_INPUT_SIZE} bytes", file=sys.stderr)
+                sys.exit(1)
+        
+        data = bytes(data_buf)
     else:
         file_size = os.path.getsize(input_file)
         if file_size > MAX_INPUT_SIZE:
@@ -145,7 +168,11 @@ def gpg_mode(args: List[str]):
                             sys.exit(1)
                     else:
                         with open(output_file, 'wb') as f:
-                            f.write(base64.b64decode(signature))
+                            try:
+                                f.write(base64.b64decode(signature))
+                            except binascii.Error as e:
+                                print(f"Error: Malformed base64 signature: {e}", file=sys.stderr)
+                                sys.exit(1)
             except IOError as e:
                 print(f"Error writing to {output_file}: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -170,7 +197,11 @@ def gpg_mode(args: List[str]):
                         print("Error: 'gpg' command not found.", file=sys.stderr)
                         sys.exit(1)
                 else:
-                    sys.stdout.buffer.write(base64.b64decode(signature))
+                    try:
+                        sys.stdout.buffer.write(base64.b64decode(signature))
+                    except binascii.Error as e:
+                        print(f"Error: Malformed base64 signature: {e}", file=sys.stderr)
+                        sys.exit(1)
                 sys.stdout.buffer.flush()
                 
     except Exception as e:
@@ -204,7 +235,7 @@ def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool =
     
     cmd = [
         'rpmsign',
-        '--define', f'__gpg {script_path}',
+        '--define', f'__gpg {shlex.quote(str(script_path))}',
         '--define', f'_gpg_name {key_id}',
         '--define', '_gpg_sign_cmd_extra_args --batch --no-tty',
         '--resign', str(rpm_file)
@@ -226,32 +257,38 @@ def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool =
         return False
 
 
-def sign_rpm_detached(rpm_path: str, output_path: Optional[str] = None,
-                      key_type: str = 'modern', verbose: bool = False) -> str:
+def sign_file_detached(file_path: str, output_path: Optional[str] = None,
+                       key_type: str = 'modern', operation: str = 'rpm', verbose: bool = False) -> str:
     """
-    Sign an RPM file (creates detached signature)
+    Sign a file (creates detached signature)
+    Supports both rpm and repodata operations
     """
-    rpm_file = Path(rpm_path)
-    if not rpm_file.exists():
-        raise FileNotFoundError(f"RPM file not found: {rpm_path}")
+    target_file = Path(file_path)
+    if not target_file.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
     
     if output_path is None:
-        output_path = str(rpm_file) + '.asc'
+        output_path = str(target_file) + '.asc'
     
     if verbose:
-        print(f"Signing: {rpm_path}")
+        print(f"Signing: {file_path}")
         print(f"Output: {output_path}")
         print(f"Key type: {key_type}")
+        print(f"Operation: sign_{operation}")
     
     try:
         client = get_client()
-        response = client.sign_file(str(rpm_file), key_type=key_type, operation='rpm')
+        response = client.sign_file(str(target_file), key_type=key_type, operation=operation)
         
         with open(output_path, 'w') as f:
             f.write(response['signature'])
         
         if verbose:
-            print(f"✓ Signature written to: {output_path}")
+            print(f"✓ Signed successfully")
+            print(f"  Request ID: {response.get('request_id')}")
+            print(f"  Key ID: {response.get('key_id')}")
+            print(f"  Signature written to: {output_path}")
+            
         return output_path
         
     except ChelonClientError as e:
@@ -261,24 +298,25 @@ def sign_rpm_detached(rpm_path: str, output_path: Optional[str] = None,
 
 def main():
     # Detect if we are being called as a GPG wrapper
-    # rpmsign usually calls with a lot of flags, including -sbo or --detach-sign
-    if len(sys.argv) > 1 and sys.argv[1].startswith('--'):
+    if len(sys.argv) > 1:
         # Check if it looks specifically like a GPG call from rpmsign
         gpg_flags = {'-sbo', '--detach-sign', '--armor', '--no-secmem-warning'}
         if any(arg in gpg_flags for arg in sys.argv):
             gpg_mode(sys.argv[1:])
-        elif '--version' in sys.argv and len(sys.argv) == 2:
+        elif sys.argv[1] == '--version' and len(sys.argv) == 2:
             # Handle standalone --version for discovery tools
             gpg_mode(sys.argv[1:])
 
     parser = argparse.ArgumentParser(
-        description='Sign RPM packages using Chelon service',
+        description='Chelon Sign - Unified Signing Tool',
         epilog='Environment variables: CHELON_URL, CHELON_TOKEN, CHELON_CERT_DIR'
     )
     
-    parser.add_argument('rpm_file', help='Path to RPM file')
-    parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign)')
-    parser.add_argument('-o', '--output', help='Output signature file (default: <rpm_file>.asc, only for detached)')
+    parser.add_argument('file', help='Path to file (RPM or repomd.xml)')
+    parser.add_argument('-t', '--type', choices=['rpm', 'repodata'], 
+                       help='Signing type (default: guess from extension or "rpm")')
+    parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign, implies --type rpm)')
+    parser.add_argument('-o', '--output', help='Output signature file (default: <file>.asc, only for detached)')
     parser.add_argument('-k', '--key-type', choices=['legacy', 'modern'], default='modern',
                        help='GPG key type to use (default: modern)')
     parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
@@ -288,16 +326,30 @@ def main():
     
     if args.insecure:
         os.environ['CHELON_VERIFY_SSL'] = 'false'
+        
+    # Determine operation type
+    op_type = args.type
+    if not op_type:
+        if args.resign:
+            op_type = 'rpm'
+        elif args.file.endswith('.xml'):
+            op_type = 'repodata'
+        else:
+            op_type = 'rpm'
     
     try:
         if args.resign:
-            success = sign_rpm_integrated(args.rpm_file, key_type=args.key_type, verbose=args.verbose)
+            if op_type != 'rpm':
+                print("Error: --resign is only supported for RPM files", file=sys.stderr)
+                return 1
+            success = sign_rpm_integrated(args.file, key_type=args.key_type, verbose=args.verbose)
             return 0 if success else 1
         else:
-            output_file = sign_rpm_detached(
-                args.rpm_file,
+            output_file = sign_file_detached(
+                args.file,
                 output_path=args.output,
                 key_type=args.key_type,
+                operation=op_type,
                 verbose=args.verbose
             )
             if not args.verbose:
@@ -314,4 +366,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-
