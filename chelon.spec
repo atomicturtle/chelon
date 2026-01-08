@@ -1,6 +1,6 @@
 Name:           chelon
 Version:        1.0.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
