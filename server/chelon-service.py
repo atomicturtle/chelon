@@ -357,16 +357,23 @@ def sign_repodata():
 
 if __name__ == '__main__':
     # Run the Flask app
-    host = os.environ.get('CHELON_HOST', '127.0.0.1')
-    port = int(os.environ.get('CHELON_PORT', 5050))
+    # Prioritize config file over environment variables
+    host = config.get('CHELON_HOST') or os.environ.get('CHELON_HOST', '127.0.0.1')
+    port = int(config.get('CHELON_PORT') or os.environ.get('CHELON_PORT') or 5050)
 
     logger.info(f"Starting Chelon service on {host}:{port}")
 
-    # SSL/TLS Configuration
-    ssl_cert = os.environ.get('CHELON_SSL_CERT')
-    ssl_key = os.environ.get('CHELON_SSL_KEY')
-    ssl_ca = os.environ.get('CHELON_SSL_CA')
-    verify_client = os.environ.get('CHELON_VERIFY_CLIENT', 'false').lower() == 'true'
+    # SSL/TLS Configuration - Prefer config file, fall back to environment
+    ssl_cert = config.get('CHELON_SSL_CERT') or os.environ.get('CHELON_SSL_CERT')
+    ssl_key = config.get('CHELON_SSL_KEY') or os.environ.get('CHELON_SSL_KEY')
+    ssl_ca = config.get('CHELON_SSL_CA') or os.environ.get('CHELON_SSL_CA')
+    
+    # Support both names for backward compatibility/consistency
+    # Precedence: config['CHELON_SSL_VERIFY_CLIENT'] > config['CHELON_VERIFY_CLIENT'] > env['CHELON_VERIFY_CLIENT']
+    verify_client_val = (config.get('CHELON_SSL_VERIFY_CLIENT') or 
+                         config.get('CHELON_VERIFY_CLIENT') or 
+                         os.environ.get('CHELON_VERIFY_CLIENT', 'false'))
+    verify_client = str(verify_client_val).lower() == 'true'
     
     ssl_context = None
     if ssl_cert and ssl_key:

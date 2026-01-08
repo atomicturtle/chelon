@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""
+Chelon Sign (Unified Client)
+
+Signs files using the Chelon service.
+Supports:
+- RPM packages (detached signatures or embedded via rpmsign)
+- Repository metadata (repomd.xml)
+- GPG emulation for rpmsign integration
+"""
+
+import os
+import sys
+import argparse
+import subprocess
+import base64
+import shlex
+import binascii
+from pathlib import Path
+from typing import Optional, List
+
+# Add tools directory to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from chelon_client import get_client, ChelonClientError
+except ImportError:
+    # Handle direct execution if not in path
+    try:
+        from tools.chelon_client import get_client, ChelonClientError
+    except ImportError:
+        print("Error: Could not import chelon_client. Ensure tools/ is in PYTHONPATH.", file=sys.stderr)
+        sys.exit(1)
+
+
+def get_gpg_version() -> str:
+    """
+    Get the version of the system gpg command.
+    Returns a generic version if gpg is not found.
+    """
+    try:
+        result = subprocess.run(['gpg', '--version'], capture_output=True, text=True, check=True)
+        first_line = result.stdout.splitlines()[0]
+        if 'gpg (GnuPG)' in first_line:
+            return first_line.split()[-1]
+    except (subprocess.CalledProcessError, FileNotFoundError, IndexError):
+        # If gpg is missing or its output is unexpected, fall back to a default version string.
+        pass
+    return "2.4.4"
+
+
+def gpg_mode(args: List[str]):
+    """
+    Emulate GPG behavior when called by rpmsign.
+    rpmsign calls gpg with flags like:
+    --no-verbose --no-armor --batch --no-tty -u <KEYID> -sbo <SIGFILE> -- -
+    """
+    output_file = None
+    input_file = "-"
+    
+    # Simple argument parser for GPG flags
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ('-o', '--output'):
+            if i + 1 < len(args):
+                output_file = args[i+1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
+        elif arg == '-sbo':
+            if i + 1 < len(args):
+                output_file = args[i+1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
+        elif arg == '-u':
+            if i + 1 < len(args):
+                # key_id is parsed but we currently rely on environment variable CHELON_KEY_TYPE
+                # as per the wrapper logic, but we should at least parse it correctly.
+                # key_id = args[i+1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
+        elif arg == '--':
+            if i + 1 < len(args):
+                input_file = args[i+1]
+            break
+        elif arg == '--version':
+            version = get_gpg_version()
+            print(f"gpg (GnuPG) {version}")
+            sys.exit(0)
+        else:
+            i += 1
+            
+    # Read input data with a 10MB limit (DoS protection)
+    MAX_INPUT_SIZE = 10 * 1024 * 1024  # 10MB
+    if input_file == "-":
+        # Read stdin in chunks to avoid buffering MAX_INPUT_SIZE+1 bytes unconditionally
+        MAX_CHUNK_SIZE = 64 * 1024  # 64KB
+        data_buf = bytearray()
+        stdin_buffer = sys.stdin.buffer
+        
+        while True:
+            # Limit each read to the remaining allowed bytes plus one extra for overflow detection
+            remaining = (MAX_INPUT_SIZE + 1) - len(data_buf)
+            if remaining <= 0:
+                break
+                
+            chunk = stdin_buffer.read(min(MAX_CHUNK_SIZE, remaining))
+            if not chunk:
+                break
+                
+            data_buf.extend(chunk)
+            
+            if len(data_buf) > MAX_INPUT_SIZE:
+                print(f"Error: Input data from stdin exceeds limit of {MAX_INPUT_SIZE} bytes", file=sys.stderr)
+                sys.exit(1)
+        
+        data = bytes(data_buf)
+    else:
+        file_size = os.path.getsize(input_file)
+        if file_size > MAX_INPUT_SIZE:
+            print(f"Error: Input file too large ({file_size} bytes)", file=sys.stderr)
+            sys.exit(1)
+        with open(input_file, 'rb') as f:
+            data = f.read()
+            
+    # Determine key type from key_id (mapping logic)
+    # In this wrapper, we rely on env CHELON_KEY_TYPE or default to modern
+    key_type = os.environ.get('CHELON_KEY_TYPE', 'modern')
+    
+    # Initialize client
+    try:
+        client = get_client()
+        response = client.sign_data(data, key_type=key_type, operation='rpm')
+        signature = response['signature']
+        
+        # rpmsign usually expects binary signature if --armor is not passed
+        # chelon-gpg-wrapper.sh handles this by checking for --armor
+        is_armored = '--armor' in args or '-a' in args
+        
+        if output_file and output_file != '-':
+            try:
+                if is_armored:
+                    with open(output_file, 'w') as f:
+                        f.write(signature)
+                else:
+                    # Strip headers and decode if binary expected
+                    if signature.startswith('-----BEGIN'):
+                        # Need to dearmor
+                        try:
+                            result = subprocess.run(
+                                ['gpg', '--dearmor'],
+                                input=signature.encode('utf-8'),
+                                capture_output=True,
+                                check=True
+                            )
+                            with open(output_file, 'wb') as f:
+                                f.write(result.stdout)
+                        except subprocess.CalledProcessError as e:
+                            print(f"Error: Failed to dearmor signature: {e.stderr.decode()}", file=sys.stderr)
+                            sys.exit(1)
+                        except FileNotFoundError:
+                            print("Error: 'gpg' command not found. Please install GnuPG to handle armored signatures in binary mode.", file=sys.stderr)
+                            sys.exit(1)
+                    else:
+                        with open(output_file, 'wb') as f:
+                            try:
+                                f.write(base64.b64decode(signature))
+                            except binascii.Error as e:
+                                print(f"Error: Malformed base64 signature: {e}", file=sys.stderr)
+                                sys.exit(1)
+            except IOError as e:
+                print(f"Error writing to {output_file}: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            if is_armored:
+                sys.stdout.write(signature)
+                sys.stdout.flush()
+            else:
+                if signature.startswith('-----BEGIN'):
+                    try:
+                        result = subprocess.run(
+                            ['gpg', '--dearmor'],
+                            input=signature.encode('utf-8'),
+                            capture_output=True,
+                            check=True
+                        )
+                        sys.stdout.buffer.write(result.stdout)
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error: Failed to dearmor signature: {e.stderr.decode()}", file=sys.stderr)
+                        sys.exit(1)
+                    except FileNotFoundError:
+                        print("Error: 'gpg' command not found.", file=sys.stderr)
+                        sys.exit(1)
+                else:
+                    try:
+                        sys.stdout.buffer.write(base64.b64decode(signature))
+                    except binascii.Error as e:
+                        print(f"Error: Malformed base64 signature: {e}", file=sys.stderr)
+                        sys.exit(1)
+                sys.stdout.buffer.flush()
+                
+    except ChelonClientError as e:
+        print(f"GPG Emulation Error (signing service): {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"GPG Emulation Error: {e}", file=sys.stderr)
+        sys.exit(1)
+        
+    sys.exit(0)
+
+
+def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
+    """
+    Embed signature into RPM using rpmsign and self as wrapper.
+    """
+    rpm_file = Path(rpm_path).absolute()
+    script_path = Path(__file__).absolute()
+    
+    # Map key_type to standard Atomicorp Key IDs if not provided
+    key_ids = {
+        'legacy': '4520AFA9',
+        'modern': 'CB2C73F04F3BE076'
+    }
+    key_id = key_ids.get(key_type, key_type)
+    
+    if verbose:
+        print(f"Integrated Signing: {rpm_file}")
+        print(f"Using Key: {key_type} ({key_id})")
+        
+    # Prepare environment for the wrapper call
+    new_env = os.environ.copy()
+    new_env['CHELON_KEY_TYPE'] = key_type
+    
+    cmd = [
+        'rpmsign',
+        '--define', f'__gpg {shlex.quote(str(script_path))}',
+        '--define', f'_gpg_name {key_id}',
+        '--define', '_gpg_sign_cmd_extra_args --batch --no-tty',
+        '--resign', str(rpm_file)
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=not verbose, text=True, env=new_env)
+        if verbose:
+            print("✓ Signature embedded successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.strip() if e.stderr else str(e)
+        if not error_msg and not verbose:
+            error_msg = "rpmsign failed (check system logs or run with --verbose)"
+        print(f"Error during integrated signing: {error_msg}", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"Unexpected error during integrated signing: {e}", file=sys.stderr)
+        return False
+
+
+def sign_file_detached(file_path: str, output_path: Optional[str] = None,
+                       key_type: str = 'modern', operation: str = 'rpm', verbose: bool = False) -> str:
+    """
+    Sign a file (creates detached signature)
+    Supports both rpm and repodata operations
+    """
+    target_file = Path(file_path)
+    if not target_file.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
+    if output_path is None:
+        output_path = str(target_file) + '.asc'
+    
+    if verbose:
+        print(f"Signing: {file_path}")
+        print(f"Output: {output_path}")
+        print(f"Key type: {key_type}")
+        print(f"Operation: sign_{operation}")
+    
+    try:
+        client = get_client()
+        response = client.sign_file(str(target_file), key_type=key_type, operation=operation)
+        
+        try:
+            with open(output_path, 'w') as f:
+                f.write(response['signature'])
+        except OSError as e:
+            print(f"Error writing signature to '{output_path}': {e}", file=sys.stderr)
+            sys.exit(1)
+        
+        if verbose:
+            print(f"✓ Signed successfully")
+            print(f"  Request ID: {response.get('request_id')}")
+            print(f"  Key ID: {response.get('key_id')}")
+            print(f"  Signature written to: {output_path}")
+            
+        return output_path
+        
+    except ChelonClientError as e:
+        print(f"Error signing file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main():
+    # Detect if we are being called as a GPG wrapper
+    if len(sys.argv) > 1:
+        # Check if it looks specifically like a GPG call from rpmsign
+        gpg_flags = {'-sbo', '--detach-sign', '--armor', '--no-secmem-warning'}
+        if any(arg in gpg_flags for arg in sys.argv):
+            gpg_mode(sys.argv[1:])
+        elif sys.argv[1] == '--version' and len(sys.argv) == 2:
+            # Handle standalone --version for discovery tools
+            gpg_mode(sys.argv[1:])
+
+    parser = argparse.ArgumentParser(
+        description='Chelon Sign - Unified Signing Tool',
+        epilog='Environment variables: CHELON_URL, CHELON_TOKEN, CHELON_CERT_DIR'
+    )
+    
+    parser.add_argument('file', help='Path to file (RPM or repomd.xml)')
+    parser.add_argument('-t', '--type', choices=['rpm', 'repodata'], 
+                       help='Signing type (default: guess from extension or "rpm")')
+    parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign, implies --type rpm)')
+    parser.add_argument('-o', '--output', help='Output signature file (default: <file>.asc, only for detached)')
+    parser.add_argument('-k', '--key-type', choices=['legacy', 'modern'], default='modern',
+                       help='GPG key type to use (default: modern)')
+    parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    if args.insecure:
+        os.environ['CHELON_VERIFY_SSL'] = 'false'
+        
+    # Determine operation type
+    op_type = args.type
+    if not op_type:
+        if args.resign:
+            op_type = 'rpm'
+        elif args.file.endswith('.xml'):
+            op_type = 'repodata'
+        else:
+            op_type = 'rpm'
+    
+    try:
+        if args.resign:
+            if op_type != 'rpm':
+                print("Error: --resign is only supported for RPM files", file=sys.stderr)
+                return 1
+            success = sign_rpm_integrated(args.file, key_type=args.key_type, verbose=args.verbose)
+            return 0 if success else 1
+        else:
+            output_file = sign_file_detached(
+                args.file,
+                output_path=args.output,
+                key_type=args.key_type,
+                operation=op_type,
+                verbose=args.verbose
+            )
+            if not args.verbose:
+                print(output_file)
+            return 0
+            
+    except KeyboardInterrupt:
+        print("\nInterrupted by user", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

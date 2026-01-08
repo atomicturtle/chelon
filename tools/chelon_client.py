@@ -53,12 +53,24 @@ class ChelonClient:
             raise ChelonClientError("No token provided. Set CHELON_TOKEN environment variable or pass token parameter.")
         
         # Validate certificate files exist
-        self.client_cert = self.cert_dir / 'client.crt'
-        self.client_key = self.cert_dir / 'client.key'
-        self.ca_cert = self.cert_dir / 'ca.crt'
+        self.client_cert = self.cert_dir / 'chelon_client.crt'
+        self.client_key = self.cert_dir / 'chelon_client.key'
+        self.ca_cert = self.cert_dir / 'chelon_ca.crt'
         
         if not self.client_cert.exists():
-            raise ChelonClientError(f"Client certificate not found: {self.client_cert}")
+            # Fallback to older names for backward compatibility if new names don't exist
+            alt_cert = self.cert_dir / 'client.crt'
+            alt_key = self.cert_dir / 'client.key'
+            alt_ca = self.cert_dir / 'ca.crt'
+            
+            if alt_cert.exists() and alt_key.exists():
+                self.client_cert = alt_cert
+                self.client_key = alt_key
+                if alt_ca.exists():
+                    self.ca_cert = alt_ca
+            else:
+                raise ChelonClientError(f"Client certificate not found: {self.client_cert}")
+        
         if not self.client_key.exists():
             raise ChelonClientError(f"Client key not found: {self.client_key}")
         if self.verify_ssl and not self.ca_cert.exists():
