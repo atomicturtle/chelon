@@ -1,6 +1,6 @@
 Name:           chelon
 Version:        1.0.0
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
@@ -136,6 +136,9 @@ fi
 %{_datadir}/%{name}/client/
 
 %changelog
+* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-6
+- Move chelon_client.py to site-packages for standard import resolution
+
 * Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-5
 - Fix python import path for client library in chelon-sign
 
