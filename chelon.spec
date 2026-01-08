@@ -1,6 +1,6 @@
 Name:           chelon
 Version:        1.0.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
@@ -136,6 +136,10 @@ fi
 %{_datadir}/%{name}/client/
 
 %changelog
+* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-4
+- Support dynamic key names in chelon-sign (removed hardcoded Key IDs)
+- Added --key-name alias for --key-type
+
 * Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-3
 - Consolidate chelon-sign-rpm and chelon-sign-repomd into chelon-sign
 - Security: Sanitize script paths in RPM macros
