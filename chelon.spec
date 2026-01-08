@@ -1,6 +1,6 @@
 Name:           chelon
 Version:        1.0.0
-Release:        7%{?dist}
+Release:        12%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
@@ -138,40 +138,5 @@ fi
 %{python3_sitelib}/__pycache__/
 
 %changelog
-* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-7
-- Fix: Ensure chelon_client.py is installed to site-packages (spec file fix)
-
-* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-6
-- Move chelon_client.py to site-packages for standard import resolution
-
-* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-5
-- Fix python import path for client library in chelon-sign
-
-* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-4
-- Support dynamic key names in chelon-sign (removed hardcoded Key IDs)
-- Added --key-name alias for --key-type
-
-* Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-3
-- Consolidate chelon-sign-rpm and chelon-sign-repomd into chelon-sign
-- Security: Sanitize script paths in RPM macros
-- Security: Optimize DoS protection with chunked reading
-- Fix: Add error handling for malformed base64 signatures
-- Fix: Improve client certificate fallback logic
-
-* Wed Jan 07 2026 Atomicorp <support@atomicorp.com> - 1.0.0-2
-- Split into server and client subpackages
-- Add client signing tools (chelon-sign-rpm, chelon-sign-repomd)
-- Add binary data signing support
-- Update HTTP API endpoints and request/response formats
-- Unified logging to journald/syslog
-- Enhanced audit logging with request tracing
-- Fixed hardcoded admin tool paths
-- Code review fixes: config ownership, SSL validation, payload size checks
-
-* Tue Jan 06 2026 Atomicorp <support@atomicorp.com> - 1.0.0-1
-- Initial package
-- Flask-based HTTP API for remote signing
-- Support for Legacy and Modern GPG keys
-- Token-based authentication
-- Audit logging
-- Default port: 5050
+* Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-12
+- Initial release

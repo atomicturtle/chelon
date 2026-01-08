@@ -130,8 +130,10 @@ def gpg_mode(args: List[str]):
             data = f.read()
             
     # Determine key type from key_id (mapping logic)
-    # In this wrapper, we rely on env CHELON_KEY_TYPE or default to modern
-    key_type = os.environ.get('CHELON_KEY_TYPE', 'modern')
+    key_type = os.environ.get('CHELON_KEY') or os.environ.get('CHELON_KEY_TYPE')
+    if not key_type:
+        print("Error: No key specified via environment (CHELON_KEY).", file=sys.stderr)
+        sys.exit(1)
     
     # Initialize client
     try:
@@ -321,8 +323,8 @@ def main():
                        help='Signing type (default: guess from extension or "rpm")')
     parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign, implies --type rpm)')
     parser.add_argument('-o', '--output', help='Output signature file (default: <file>.asc, only for detached)')
-    parser.add_argument('-k', '--key-type', '--key-name', dest='key_type', default='modern',
-                       help='GPG key name/type (default: modern)') # --key-name is alias
+    parser.add_argument('-k', '--key', '--key-name', dest='key_name', metavar='KEY',
+                       help='GPG key name')
     parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
     
@@ -342,17 +344,25 @@ def main():
             op_type = 'rpm'
     
     try:
+        # Validate key_name presence or fallback to env
+        key_name = args.key_name
+        if not key_name:
+            key_name = os.environ.get('CHELON_KEY') or os.environ.get('CHELON_KEY_TYPE')
+        
+        if not key_name:
+            parser.error("GPG key name is required (-k/--key or CHELON_KEY env var)")
+
         if args.resign:
             if op_type != 'rpm':
                 print("Error: --resign is only supported for RPM files", file=sys.stderr)
                 return 1
-            success = sign_rpm_integrated(args.file, key_type=args.key_type, verbose=args.verbose)
+            success = sign_rpm_integrated(args.file, key_type=key_name, verbose=args.verbose)
             return 0 if success else 1
         else:
             output_file = sign_file_detached(
                 args.file,
                 output_path=args.output,
-                key_type=args.key_type,
+                key_type=key_name,
                 operation=op_type,
                 verbose=args.verbose
             )
