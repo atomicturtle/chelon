@@ -82,25 +82,55 @@ class SigningEngine:
         self._load_keys()
     
     def get_key_id(self, key_type: str) -> str:
-        """Get key ID for a given key type
+        """Get key ID for a given key type or ID
         
         Args:
-            key_type: Name of the key type
+            key_type: Name of the key type OR actual Key ID
             
         Returns:
             GPG key ID
             
         Raises:
-            ValueError: If key type is unknown or disabled
+            ValueError: If key type/ID is unknown or disabled
         """
-        if key_type not in self.keys:
-            raise ValueError(f"Unknown key type: {key_type}")
+        # 1. Check if it's a named alias (as defined in keys.json)
+        if key_type in self.keys:
+            key_info = self.keys[key_type]
+            if not key_info.get('enabled', True):
+                raise ValueError(f"Key type '{key_type}' is disabled")
+            return key_info['key_id']
+            
+        # 2. Check if it's a known Key ID directly
+        for name, info in self.keys.items():
+            if info['key_id'].upper() == key_type.upper():
+                if not info.get('enabled', True):
+                    raise ValueError(f"Key ID '{key_type}' is disabled")
+                return info['key_id']
+                
+        raise ValueError(f"Unknown key type or ID: {key_type}")
+
+    def get_key_name(self, key_type: str) -> str:
+        """Get the actual name of a key from an alias or ID
         
-        key_info = self.keys[key_type]
-        if not key_info.get('enabled', True):
-            raise ValueError(f"Key type '{key_type}' is disabled")
-        
-        return key_info['key_id']
+        Args:
+            key_type: Name of the key type OR actual Key ID
+            
+        Returns:
+            The configured name of the key (e.g., 'legacy', 'modern', 'newkey')
+            
+        Raises:
+            ValueError: If key type/ID is unknown
+        """
+        # 1. If it's already a configured name, return it
+        if key_type in self.keys:
+            return key_type
+            
+        # 2. If it's a Key ID, find the matching name
+        for name, info in self.keys.items():
+            if info['key_id'].upper() == key_type.upper():
+                return name
+                
+        raise ValueError(f"Unknown key type or ID: {key_type}")
     
     def get_key_fingerprint(self, key_type: str) -> str:
         """Get full fingerprint for a given key type"""
@@ -158,10 +188,9 @@ class SigningEngine:
         Sign data using specified key
         
         Args:
-            data: Raw data to sign (bytes)
-            key_type: Type of key to use ('legacy' or 'modern')
-            passphrase: GPG key passphrase
-        
+            data: Data to sign
+            key_selector: Name or ID of the key to use
+            passphrase: GPG passphrase for the key
         Returns:
             ASCII-armored GPG signature
         """

@@ -1,6 +1,6 @@
 Name:           chelon
-Version:        1.0.0
-Release:        12%{?dist}
+Version:        1.2.0
+Release:        2%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
@@ -138,5 +138,21 @@ fi
 %{python3_sitelib}/__pycache__/
 
 %changelog
+* Thu Mar 26 2026 Scott Shinn <support@atomicorp.com> - 1.2.0-1
+- Make signing payload limit configurable via MAX_PAYLOAD_BYTES
+- Increase default server-side payload limit to 50MB
+- Improve payload limit error messages to include configured byte limits
+- Add Makefile help target for common build/test commands
+
+* Fri Jan 16 2026 Scott Shinn <support@atomicorp.com> - 1.1.0-2
+- Generalize key management (remove hardcoded legacy/modern names)
+- Support dynamic passphrase lookup SIGNING_KEY_<NAME>_PASSPHRASE
+- Remove client-side hardcoded defaults
+
+* Fri Jan 16 2026 Scott Shinn <support@atomicorp.com> - 1.1.0-1
+- Add support for resolving signing keys by GPG Key ID
+- Update chelon-sign to correctly parse -u <KEYID> in GPG emulation mode
+- Improve SigningEngine to allow direct Key ID lookups
+
 * Thu Jan 08 2026 Atomicorp <support@atomicorp.com> - 1.0.0-12
 - Initial release

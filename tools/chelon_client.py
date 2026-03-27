@@ -136,13 +136,13 @@ class ChelonClient:
         except Exception as e:
             raise ChelonClientError(f"Request failed: {e}")
     
-    def sign_data(self, data: bytes, key_type: str = 'modern', operation: str = 'rpm') -> Dict[str, Any]:
+    def sign_data(self, data: bytes, key_type: Optional[str] = None, operation: str = 'rpm') -> Dict[str, Any]:
         """
         Sign arbitrary data
         
         Args:
             data: Data to sign (will be base64 encoded)
-            key_type: Key type to use ('legacy' or 'modern')
+            key_selector: Optional name or ID of the key to use (defaults to server default)
             operation: Operation type ('rpm' or 'repodata')
             
         Returns:
@@ -156,9 +156,10 @@ class ChelonClient:
         
         # Prepare request
         payload = {
-            'data': encoded_data,
-            'key_type': key_type
+            'data': encoded_data
         }
+        if key_type:
+            payload['key_type'] = key_type
         
         # Make request
         endpoint = f'/api/v1/sign/{operation}'
@@ -170,13 +171,13 @@ class ChelonClient:
         
         return response
     
-    def sign_file(self, file_path: str, key_type: str = 'modern', operation: str = 'rpm') -> Dict[str, Any]:
+    def sign_file(self, file_path: str, key_type: Optional[str] = None, operation: str = 'rpm') -> Dict[str, Any]:
         """
         Sign a file
         
         Args:
             file_path: Path to file to sign
-            key_type: Key type to use
+            key_type: Optional key type/ID to use
             operation: Operation type
             
         Returns:

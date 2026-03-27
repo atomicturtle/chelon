@@ -68,6 +68,23 @@ config = load_config(CONFIG_FILE)
 # Log config status
 logger.info("Configuration loaded successfully")
 
+DEFAULT_MAX_PAYLOAD_BYTES = 50 * 1024 * 1024
+
+def _max_payload_bytes_from_config() -> int:
+    """Return configured payload limit, with safe fallback."""
+    raw = config.get('MAX_PAYLOAD_BYTES', str(DEFAULT_MAX_PAYLOAD_BYTES))
+    try:
+        value = int(raw)
+        if value <= 0:
+            raise ValueError("MAX_PAYLOAD_BYTES must be > 0")
+        return value
+    except Exception:
+        logger.warning(
+            "Invalid MAX_PAYLOAD_BYTES value '%s'; using default %d",
+            raw, DEFAULT_MAX_PAYLOAD_BYTES
+        )
+        return DEFAULT_MAX_PAYLOAD_BYTES
+
 # Determine data directory
 data_dir = config.get('DATA_DIR', '/var/lib/chelon')
 keys_file = os.path.join(data_dir, 'keys.json')
@@ -159,12 +176,13 @@ def _handle_signing(operation):
     
     raw_data_b64 = data.get('data')
     
+    max_payload_bytes = _max_payload_bytes_from_config()
+    max_base64_bytes = ((max_payload_bytes + 2) // 3) * 4
+
     # DoS Protection: Check base64 string size BEFORE decoding to prevent memory exhaustion
-    # Base64 encoding increases size by ~33%, so 13.3MB base64 = ~10MB decoded
     if raw_data_b64:
         base64_size = len(raw_data_b64)
-        # Quick rejection: if base64 string is > 13.3MB, decoded will be > 10MB
-        if base64_size > 13981013:  # ~13.3MB in bytes
+        if base64_size > max_base64_bytes:
             latency = time.time() - start_time
             audit_logger.log_signing(
                 token_id=token_info['token_id'],
@@ -178,7 +196,10 @@ def _handle_signing(operation):
                 payload_size=base64_size,
                 error='Payload too large (pre-decode check)'
             )
-            return jsonify({'error': 'Payload too large (base64 size exceeds limit)', 'request_id': request_id}), 413
+            return jsonify({
+                'error': f'Payload too large (base64 size exceeds limit: {max_base64_bytes} bytes)',
+                'request_id': request_id
+            }), 413
     
     # Decode and validate payload
     try:
@@ -205,7 +226,7 @@ def _handle_signing(operation):
     payload_size = len(raw_data)
     
     # Secondary check: verify decoded size is within limit
-    if payload_size > 10 * 1024 * 1024:  # 10MB limit
+    if payload_size > max_payload_bytes:
         latency = time.time() - start_time
         audit_logger.log_signing(
             token_id=token_info['token_id'],
@@ -219,49 +240,23 @@ def _handle_signing(operation):
             payload_size=payload_size,
             error='Payload too large'
         )
-        return jsonify({'error': f'Payload too large (decoded size: {payload_size} bytes, limit: 10MB)', 'request_id': request_id}), 413
+        return jsonify({
+            'error': f'Payload too large (decoded size: {payload_size} bytes, limit: {max_payload_bytes} bytes)',
+            'request_id': request_id
+        }), 413
 
-    # Validate key_type parameter
-    key_type = data.get('key_type', 'legacy')
-
-    # Prefer dynamic key validation based on signing_engine configuration, with
-    # a fallback to legacy/modern-only validation for backward compatibility.
-    available_keys = None
-
-    # Try common patterns for exposing configured keys on signing_engine.
-    keys_attr = getattr(signing_engine, "keys", None)
-    if keys_attr is not None:
-        if isinstance(keys_attr, dict):
-            available_keys = list(keys_attr.keys())
-        elif isinstance(keys_attr, (list, tuple, set)):
-            available_keys = list(keys_attr)
-
-    # Optionally support a method-based API if present.
-    if not available_keys and hasattr(signing_engine, "get_available_keys"):
-        try:
-            dynamic_keys = signing_engine.get_available_keys()
-            if dynamic_keys:
-                available_keys = list(dynamic_keys)
-        except Exception:
-            # If the engine does not support this call or it fails, we will
-            # fall back to the static legacy/modern validation below.
-            available_keys = None
-
-    if available_keys:
-        if key_type not in available_keys:
-            logger.warning(f"[{request_id}] Invalid key_type: {key_type}")
-            return jsonify({
-                'error': f'Invalid key_type: {key_type}. Must be one of: {", ".join(sorted(available_keys))}',
-                'request_id': request_id
-            }), 400
-    else:
-        # Fallback for older configurations where only legacy/modern are valid.
-        if key_type not in ['legacy', 'modern']:
-            logger.warning(f"[{request_id}] Invalid key_type: {key_type}")
-            return jsonify({
-                'error': f'Invalid key_type: {key_type}. Must be "legacy" or "modern"',
-                'request_id': request_id
-            }), 400
+    # Resolve and validate Key ID
+    # Default to the signing engine's default key if not specified
+    key_type = data.get('key_type', signing_engine.default_key)
+    try:
+        resolved_key_id = signing_engine.get_key_id(key_type)
+        resolved_key_name = signing_engine.get_key_name(key_type)
+    except ValueError as e:
+        logger.warning(f"[{request_id}] Invalid key_type or ID: {key_type} - {e}")
+        return jsonify({
+            'error': str(e),
+            'request_id': request_id
+        }), 400
     
     sign_target = None
     data_id = None
@@ -272,8 +267,20 @@ def _handle_signing(operation):
     
     # Sign the data
     try:
-        passphrase = config.get('MODERN_PASSPHRASE' if key_type == 'modern' else 'LEGACY_PASSPHRASE')
-        signature = signing_engine.sign_data(sign_target, key_type, passphrase)
+        # Resolve which passphrase to use based on target Key Name.
+        # We look for SIGNING_KEY_<NAME>_PASSPHRASE in the config.
+        # Fallback to LEGACY_PASSPHRASE / MODERN_PASSPHRASE only for backward compatibility if configured that way.
+        passphrase_key = f"SIGNING_KEY_{resolved_key_name.upper()}_PASSPHRASE"
+        passphrase = config.get(passphrase_key)
+        
+        # Backward compatibility fallback
+        if not passphrase:
+             if resolved_key_name == 'modern':
+                 passphrase = config.get('MODERN_PASSPHRASE')
+             elif resolved_key_name == 'legacy':
+                 passphrase = config.get('LEGACY_PASSPHRASE')
+
+        signature = signing_engine.sign_data(sign_target, resolved_key_id, passphrase)
         key_id = signing_engine.get_key_id(key_type)
         key_fingerprint = signing_engine.get_key_fingerprint(key_type)
         

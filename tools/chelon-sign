@@ -78,9 +78,10 @@ def gpg_mode(args: List[str]):
                 sys.exit(1)
         elif arg == '-u':
             if i + 1 < len(args):
-                # key_id is parsed but we currently rely on environment variable CHELON_KEY_TYPE
-                # as per the wrapper logic, but we should at least parse it correctly.
-                # key_id = args[i+1]
+                key_id = args[i+1]
+                # If we got a key_id from -u, use it as the default key_type
+                if not os.environ.get('CHELON_KEY') and not os.environ.get('CHELON_KEY_TYPE'):
+                    os.environ['CHELON_KEY'] = key_id
                 i += 2
             else:
                 print(f"Error: {arg} requires an argument", file=sys.stderr)
@@ -131,9 +132,7 @@ def gpg_mode(args: List[str]):
             
     # Determine key type from key_id (mapping logic)
     key_type = os.environ.get('CHELON_KEY') or os.environ.get('CHELON_KEY_TYPE')
-    if not key_type:
-        print("Error: No key specified via environment (CHELON_KEY).", file=sys.stderr)
-        sys.exit(1)
+    # If no key is specified, we let the server use its default
     
     # Initialize client
     try:
@@ -217,7 +216,7 @@ def gpg_mode(args: List[str]):
     sys.exit(0)
 
 
-def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool = False):
+def sign_rpm_integrated(rpm_path: str, key_type: Optional[str] = None, verbose: bool = False):
     """
     Embed signature into RPM using rpmsign and self as wrapper.
     """
@@ -225,7 +224,9 @@ def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool =
     script_path = Path(__file__).absolute()
     
     # Use the provided key type/name directly as the key ID
-    key_id = key_type
+    # If None, rpmsign won't have a specific _gpg_name, and our GPG wrapper
+    # will fall back to the server default.
+    key_id = key_type or "default"
     
     if verbose:
         print(f"Integrated Signing: {rpm_file}")
@@ -260,7 +261,7 @@ def sign_rpm_integrated(rpm_path: str, key_type: str = 'modern', verbose: bool =
 
 
 def sign_file_detached(file_path: str, output_path: Optional[str] = None,
-                       key_type: str = 'modern', operation: str = 'rpm', verbose: bool = False) -> str:
+                       key_type: Optional[str] = None, operation: str = 'rpm', verbose: bool = False) -> str:
     """
     Sign a file (creates detached signature)
     Supports both rpm and repodata operations
@@ -344,13 +345,10 @@ def main():
             op_type = 'rpm'
     
     try:
-        # Validate key_name presence or fallback to env
+        # key_name can be None; the client will omit it and the server will use its default
         key_name = args.key_name
         if not key_name:
             key_name = os.environ.get('CHELON_KEY') or os.environ.get('CHELON_KEY_TYPE')
-        
-        if not key_name:
-            parser.error("GPG key name is required (-k/--key or CHELON_KEY env var)")
 
         if args.resign:
             if op_type != 'rpm':

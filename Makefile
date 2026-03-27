@@ -1,20 +1,26 @@
-NAME = chelon
-VERSION = 1.0.0
-RELEASE = 2
+SPECFILE = chelon.spec
+NAME = $(shell awk '/^Name:/ {print $$2; exit}' $(SPECFILE))
+VERSION = $(shell awk '/^Version:/ {print $$2; exit}' $(SPECFILE))
+RELEASE = $(shell awk '/^Release:/ {print $$2; exit}' $(SPECFILE) | sed 's/%{?dist}//g')
 
-.PHONY: all clean srpm rpm
+.PHONY: all help clean srpm rpm test-local
 
 all: rpm
 
-# Create source tarball
-tarball:
+help:
+	@echo "Chelon build targets:"
+	@echo "  help        Show this help message"
+	@echo "  srpm        Build source RPM"
+	@echo "  rpm         Build binary RPM (default via 'all')"
+	@echo "  clean       Remove local build artifacts"
+	@echo "  test-local  Run Chelon service locally"
+
+# Create SRPM
+srpm:
 	mkdir -p $(NAME)-$(VERSION)
 	cp -r server tools systemd config README.md $(NAME)-$(VERSION)/
 	tar czf $(NAME)-$(VERSION).tar.gz $(NAME)-$(VERSION)
 	rm -rf $(NAME)-$(VERSION)
-
-# Create SRPM
-srpm: tarball
 	mkdir -p ~/rpmbuild/{SOURCES,SPECS,SRPMS}
 	cp $(NAME)-$(VERSION).tar.gz ~/rpmbuild/SOURCES/
 	cp $(NAME).spec ~/rpmbuild/SPECS/
@@ -31,17 +37,6 @@ clean:
 	rm -rf ~/rpmbuild/BUILD/$(NAME)-$(VERSION)
 	rm -f ~/rpmbuild/RPMS/noarch/$(NAME)-$(VERSION)-$(RELEASE)*.rpm
 	rm -f ~/rpmbuild/SRPMS/$(NAME)-$(VERSION)-$(RELEASE)*.src.rpm
-
-# Install dependencies (Fedora 43)
-deps:
-	sudo dnf install -y \
-		python3 \
-		python3-flask \
-		python3-gnupg \
-		python3-pydantic \
-		gnupg2 \
-		rpm-build \
-		systemd
 
 # Test the service locally (without RPM)
 test-local:
