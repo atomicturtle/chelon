@@ -22,6 +22,19 @@ from typing import Optional, List
 # Add tools directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+DEFAULT_MAX_INPUT_SIZE = 50 * 1024 * 1024  # 50MB
+
+
+def get_max_input_size() -> int:
+    raw = os.environ.get("CHELON_MAX_INPUT_SIZE_BYTES", str(DEFAULT_MAX_INPUT_SIZE))
+    try:
+        value = int(raw)
+        if value <= 0:
+            raise ValueError("CHELON_MAX_INPUT_SIZE_BYTES must be > 0")
+        return value
+    except Exception:
+        return DEFAULT_MAX_INPUT_SIZE
+
 try:
     from chelon_client import get_client, ChelonClientError
 except ImportError:
@@ -97,8 +110,8 @@ def gpg_mode(args: List[str]):
         else:
             i += 1
             
-    # Read input data with a 10MB limit (DoS protection)
-    MAX_INPUT_SIZE = 10 * 1024 * 1024  # 10MB
+    # Read input data with a configurable limit (DoS protection)
+    MAX_INPUT_SIZE = get_max_input_size()
     if input_file == "-":
         # Read stdin in chunks to avoid buffering MAX_INPUT_SIZE+1 bytes unconditionally
         MAX_CHUNK_SIZE = 64 * 1024  # 64KB

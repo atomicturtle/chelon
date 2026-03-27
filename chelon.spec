@@ -1,6 +1,6 @@
 Name:           chelon
 Version:        1.2.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Remote GPG package signing service
 
 License:        GPL-2.0-or-later
@@ -138,6 +138,10 @@ fi
 %{python3_sitelib}/__pycache__/
 
 %changelog
+* Thu Mar 26 2026 Scott Shinn <support@atomicorp.com> - 1.2.0-3
+- Increase chelon-sign client stdin size limit to 50MB
+- Make client limit configurable via CHELON_MAX_INPUT_SIZE_BYTES
+
 * Thu Mar 26 2026 Scott Shinn <support@atomicorp.com> - 1.2.0-1
 - Make signing payload limit configurable via MAX_PAYLOAD_BYTES
 - Increase default server-side payload limit to 50MB
