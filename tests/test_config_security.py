@@ -5,6 +5,7 @@ import unittest
 import tempfile
 import json
 import importlib.util
+from unittest.mock import MagicMock, patch
 
 # Add server to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../server'))
@@ -37,6 +38,10 @@ class TestConfigSecurity(unittest.TestCase):
         # though we are manually loading it.
         if "chelon_service" in sys.modules:
             del sys.modules["chelon_service"]
+        for name in ("signing_engine", "auth", "audit", "gnupg"):
+            mod = sys.modules.get(name)
+            if mod is not None and isinstance(mod, MagicMock):
+                del sys.modules[name]
 
     def load_service_module(self):
         spec = importlib.util.spec_from_file_location("chelon_service", self.service_path)

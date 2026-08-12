@@ -76,53 +76,52 @@ class ChelonClient:
         if self.verify_ssl and not self.ca_cert.exists():
             raise ChelonClientError(f"CA certificate not found: {self.ca_cert}")
     
-    def _make_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Make authenticated request to Chelon API
-        
-        Args:
-            endpoint: API endpoint (e.g., '/api/v1/sign/rpm')
-            data: Request payload
-            
-        Returns:
-            Response data as dict
-            
-        Raises:
-            ChelonClientError: On request failure
-        """
-        url = urljoin(self.url, endpoint)
-        
-        # Prepare request
-        headers = {
-            'Authorization': f'Bearer {self.token}',
-            'Content-Type': 'application/json'
-        }
-        
-        request_data = json.dumps(data).encode('utf-8')
-        req = urllib.request.Request(url, data=request_data, headers=headers, method='POST')
-        
-        # Setup SSL context
+    def _ssl_context(self) -> ssl.SSLContext:
+        """Build an SSL context for mTLS requests."""
         if self.verify_ssl:
-            # When verifying SSL, ensure the provided CA certificate file exists before using it
             ca_cert_path = Path(self.ca_cert) if not isinstance(self.ca_cert, Path) else self.ca_cert
             if not ca_cert_path.is_file():
                 raise ChelonClientError(f"CA certificate file not found: {ca_cert_path}")
             ssl_context = ssl.create_default_context(cafile=str(ca_cert_path))
         else:
-            # When not verifying SSL, do not load a CA file
             ssl_context = ssl.create_default_context()
-        
+
         ssl_context.load_cert_chain(certfile=str(self.client_cert), keyfile=str(self.client_key))
-        
+
         if not self.verify_ssl:
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
-        
-        # Make request
+        return ssl_context
+
+    def _http_request(
+        self,
+        endpoint: str,
+        data: Optional[Dict[str, Any]] = None,
+        method: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Make an authenticated HTTP request to Chelon.
+
+        Args:
+            endpoint: API endpoint (e.g., '/api/v1/sign/rpm' or '/api/v1/keys')
+            data: Optional JSON body (implies POST when method not set)
+            method: HTTP method (default POST if data else GET)
+        """
+        url = urljoin(self.url, endpoint)
+        if method is None:
+            method = 'POST' if data is not None else 'GET'
+
+        headers = {
+            'Authorization': f'Bearer {self.token}',
+            'Content-Type': 'application/json',
+        }
+        request_data = json.dumps(data).encode('utf-8') if data is not None else None
+        req = urllib.request.Request(url, data=request_data, headers=headers, method=method)
+        ssl_context = self._ssl_context()
+
         try:
             with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
-                response_data = json.loads(response.read().decode('utf-8'))
-                return response_data
+                return json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8')
             try:
@@ -135,14 +134,47 @@ class ChelonClient:
             raise ChelonClientError(f"Connection error: {e.reason}")
         except Exception as e:
             raise ChelonClientError(f"Request failed: {e}")
+
+    def _make_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Make authenticated POST request to Chelon API (signing endpoints)."""
+        return self._http_request(endpoint, data=data, method='POST')
     
+    def list_keys(self) -> list:
+        """Return configured signing keys from GET /api/v1/keys."""
+        response = self._http_request('/api/v1/keys', method='GET')
+        if 'error' in response:
+            raise ChelonClientError(f"Failed to list keys: {response['error']}")
+        return response.get('keys') or []
+
+    def get_key_backend(self, key_name: str) -> Optional[str]:
+        """
+        Resolve the signing backend for a key alias or key ID.
+
+        Returns:
+            'gpg', 'sequoia', or None if the key is not listed.
+        """
+        if not key_name:
+            return None
+        needle = key_name.upper()
+        for entry in self.list_keys():
+            alias = str(entry.get('type') or entry.get('name') or '')
+            key_id = str(entry.get('key_id') or '')
+            fingerprint = str(entry.get('fingerprint') or '')
+            if (
+                alias == key_name
+                or key_id.upper() == needle
+                or fingerprint.upper() == needle
+            ):
+                return (entry.get('backend') or 'gpg').lower()
+        return None
+
     def sign_data(self, data: bytes, key_type: Optional[str] = None, operation: str = 'rpm') -> Dict[str, Any]:
         """
         Sign arbitrary data
         
         Args:
             data: Data to sign (will be base64 encoded)
-            key_selector: Optional name or ID of the key to use (defaults to server default)
+            key_type: Optional name or ID of the key to use (defaults to server default)
             operation: Operation type ('rpm' or 'repodata')
             
         Returns:

@@ -1,10 +1,11 @@
-# Chelon - Remote GPG Signing Service
+# Chelon - Remote Package Signing Service
 
-Chelon is a secure remote signing service for RPM packages and repository metadata. Build servers send package hashes via HTTPS API and receive GPG signatures, eliminating the need for private keys on build infrastructure.
+Chelon is a secure remote signing service for RPM packages and repository metadata. Build servers send signing payloads (RPM digests for integrated signing, or full files for detached signatures) via HTTPS API and receive OpenPGP signatures, eliminating the need for private keys on build infrastructure.
 
 ## Features
 
 - **Remote Signing**: Build servers never touch private keys
+- **Classical + RPMv6**: GnuPG for classical keys; Sequoia (`sq`) for V6 dual-sign keys (PQ algorithms today)
 - **Dynamic Key Configuration**: Manage signing keys via admin tool without code changes
 - **Token Authentication**: Secure API access with rate limiting
 - **Audit Logging**: All signing operations logged for compliance
@@ -37,7 +38,7 @@ Chelon is a secure remote signing service for RPM packages and repository metada
          ▼
 ┌─────────────────┐
 │ Signing Engine  │
-│  - GPG Keyring  │
+│  - GnuPG / sq   │
 │  - Key Config   │
 └─────────────────┘
          │
@@ -76,11 +77,18 @@ Chelon uses a JSON configuration file to manage signing keys. You must configure
 sudo chelon-admin keys add legacy 4520AFA9 \
   --description "Legacy signing key for EL7/EL8"
 
-# Add your modern key  
+# Add your modern key
 sudo chelon-admin keys add modern CB2C73F04F3BE076 \
+  --backend gpg \
   --description "Modern signing key for EL9+"
 
-# Set the default key
+# Optional: register a Sequoia-backed V6 key (fingerprint from `sq key list`)
+# Name is an alias only — "pqc" is convention, not a Chelon type
+sudo chelon-admin keys add pqc <64-hex-fingerprint> \
+  --backend sequoia \
+  --description "RPMv6 ML-DSA-87+Ed448"
+
+# Set the default key (classical)
 sudo chelon-admin keys set-default modern
 
 # List configured keys
@@ -89,11 +97,20 @@ sudo chelon-admin keys list
 
 **Output:**
 ```
-Name                 Key ID               Status     Default    Description
-------------------------------------------------------------------------------------------
-legacy               4520AFA9             enabled               Legacy signing key for EL7/EL8
-modern               CB2C73F04F3BE076     enabled    ✓          Modern signing key for EL9+
+Name             Key ID               Backend    Status     Default  Description
+----------------------------------------------------------------------------------------------------
+legacy           4520AFA9             gpg        enabled             Legacy signing key for EL7/EL8
+modern           CB2C73F04F3BE076     gpg        enabled    ✓        Modern signing key for EL9+
+pqc              <fingerprint>        sequoia    enabled             RPMv6 ML-DSA-87+Ed448
 ```
+
+Dual-sign RPMs with:
+
+```bash
+chelon-sign --dual-sign --key-name modern --v6-key pqc package.rpm
+```
+
+Prefer enabling dual-sign for **EL9** packages first; gate **EL10** separately until V6 pubkeys are deployed (see `docs/SIGNING_STRATEGY.md`).
 
 > [!IMPORTANT]
 > The service will not start without a configured `keys.json` file.

@@ -6,7 +6,8 @@ Signs files using the Chelon service.
 Supports:
 - RPM packages (detached signatures or embedded via rpmsign)
 - Repository metadata (repomd.xml)
-- GPG emulation for rpmsign integration
+- GPG / Sequoia emulation for rpmsign integration
+- Opt-in classical + RPMv6 dual-sign (V4 resign then --addsign --rpmv6)
 """
 
 import os
@@ -16,6 +17,7 @@ import subprocess
 import base64
 import shlex
 import binascii
+import errno
 from pathlib import Path
 from typing import Optional, List
 
@@ -60,6 +62,105 @@ def get_gpg_version() -> str:
         # If gpg is missing or its output is unexpected, fall back to a default version string.
         pass
     return "2.4.4"
+
+
+def _read_payload(input_file: str) -> bytes:
+    """Read signing payload from stdin or a file with a size limit."""
+    max_input_size = get_max_input_size()
+    if input_file == "-":
+        max_chunk_size = 64 * 1024
+        data_buf = bytearray()
+        stdin_buffer = sys.stdin.buffer
+
+        while True:
+            remaining = (max_input_size + 1) - len(data_buf)
+            if remaining <= 0:
+                break
+
+            chunk = stdin_buffer.read(min(max_chunk_size, remaining))
+            if not chunk:
+                break
+
+            data_buf.extend(chunk)
+
+            if len(data_buf) > max_input_size:
+                print(
+                    f"Error: Input data from stdin exceeds limit of {max_input_size} bytes",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+        return bytes(data_buf)
+
+    file_size = os.path.getsize(input_file)
+    if file_size > max_input_size:
+        print(f"Error: Input file too large ({file_size} bytes)", file=sys.stderr)
+        sys.exit(1)
+    with open(input_file, "rb") as f:
+        return f.read()
+
+
+def _dearmor_signature(signature: str) -> bytes:
+    """Convert an armored OpenPGP signature to binary bytes."""
+    if not signature.startswith("-----BEGIN"):
+        try:
+            return base64.b64decode(signature)
+        except binascii.Error as e:
+            raise ValueError(f"Malformed base64 signature: {e}") from e
+
+    # Prefer sq (handles PQC packets); fall back to gpg --dearmor.
+    # Treat missing/unusable binaries the same so a broken sq install cannot
+    # hard-fail classical signing (seen on CI as Permission denied: 'sq').
+    for cmd in (
+        ["sq", "packet", "dearmor"],
+        ["gpg", "--dearmor"],
+    ):
+        try:
+            result = subprocess.run(
+                cmd,
+                input=signature.encode("utf-8"),
+                capture_output=True,
+                check=True,
+            )
+            return result.stdout
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            continue
+        except OSError as e:
+            if getattr(e, "errno", None) in (errno.EACCES, errno.ENOENT):
+                continue
+            raise
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.decode(errors="replace") if e.stderr else str(e)
+            raise ValueError(f"Failed to dearmor signature via {cmd[0]}: {err}") from e
+
+    raise ValueError(
+        "Cannot dearmor signature: install sequoia-sq or GnuPG (gpg --dearmor)."
+    )
+
+
+def _write_signature(signature: str, output_file: Optional[str], binary: bool) -> None:
+    """Write armored or binary signature to a file or stdout."""
+    try:
+        if output_file and output_file != "-":
+            if binary:
+                with open(output_file, "wb") as f:
+                    f.write(_dearmor_signature(signature))
+            else:
+                with open(output_file, "w", encoding="utf-8") as f:
+                    f.write(signature)
+            return
+
+        if binary:
+            sys.stdout.buffer.write(_dearmor_signature(signature))
+            sys.stdout.buffer.flush()
+        else:
+            sys.stdout.write(signature)
+            sys.stdout.flush()
+    except (IOError, ValueError) as e:
+        print(f"Error writing signature: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def gpg_mode(args: List[str]):
@@ -110,38 +211,7 @@ def gpg_mode(args: List[str]):
         else:
             i += 1
             
-    # Read input data with a configurable limit (DoS protection)
-    MAX_INPUT_SIZE = get_max_input_size()
-    if input_file == "-":
-        # Read stdin in chunks to avoid buffering MAX_INPUT_SIZE+1 bytes unconditionally
-        MAX_CHUNK_SIZE = 64 * 1024  # 64KB
-        data_buf = bytearray()
-        stdin_buffer = sys.stdin.buffer
-        
-        while True:
-            # Limit each read to the remaining allowed bytes plus one extra for overflow detection
-            remaining = (MAX_INPUT_SIZE + 1) - len(data_buf)
-            if remaining <= 0:
-                break
-                
-            chunk = stdin_buffer.read(min(MAX_CHUNK_SIZE, remaining))
-            if not chunk:
-                break
-                
-            data_buf.extend(chunk)
-            
-            if len(data_buf) > MAX_INPUT_SIZE:
-                print(f"Error: Input data from stdin exceeds limit of {MAX_INPUT_SIZE} bytes", file=sys.stderr)
-                sys.exit(1)
-        
-        data = bytes(data_buf)
-    else:
-        file_size = os.path.getsize(input_file)
-        if file_size > MAX_INPUT_SIZE:
-            print(f"Error: Input file too large ({file_size} bytes)", file=sys.stderr)
-            sys.exit(1)
-        with open(input_file, 'rb') as f:
-            data = f.read()
+    data = _read_payload(input_file)
             
     # Determine key type from key_id (mapping logic)
     key_type = os.environ.get('CHELON_KEY') or os.environ.get('CHELON_KEY_TYPE')
@@ -154,70 +224,8 @@ def gpg_mode(args: List[str]):
         signature = response['signature']
         
         # rpmsign usually expects binary signature if --armor is not passed
-        # chelon-gpg-wrapper.sh handles this by checking for --armor
         is_armored = '--armor' in args or '-a' in args
-        
-        if output_file and output_file != '-':
-            try:
-                if is_armored:
-                    with open(output_file, 'w') as f:
-                        f.write(signature)
-                else:
-                    # Strip headers and decode if binary expected
-                    if signature.startswith('-----BEGIN'):
-                        # Need to dearmor
-                        try:
-                            result = subprocess.run(
-                                ['gpg', '--dearmor'],
-                                input=signature.encode('utf-8'),
-                                capture_output=True,
-                                check=True
-                            )
-                            with open(output_file, 'wb') as f:
-                                f.write(result.stdout)
-                        except subprocess.CalledProcessError as e:
-                            print(f"Error: Failed to dearmor signature: {e.stderr.decode()}", file=sys.stderr)
-                            sys.exit(1)
-                        except FileNotFoundError:
-                            print("Error: 'gpg' command not found. Please install GnuPG to handle armored signatures in binary mode.", file=sys.stderr)
-                            sys.exit(1)
-                    else:
-                        with open(output_file, 'wb') as f:
-                            try:
-                                f.write(base64.b64decode(signature))
-                            except binascii.Error as e:
-                                print(f"Error: Malformed base64 signature: {e}", file=sys.stderr)
-                                sys.exit(1)
-            except IOError as e:
-                print(f"Error writing to {output_file}: {e}", file=sys.stderr)
-                sys.exit(1)
-        else:
-            if is_armored:
-                sys.stdout.write(signature)
-                sys.stdout.flush()
-            else:
-                if signature.startswith('-----BEGIN'):
-                    try:
-                        result = subprocess.run(
-                            ['gpg', '--dearmor'],
-                            input=signature.encode('utf-8'),
-                            capture_output=True,
-                            check=True
-                        )
-                        sys.stdout.buffer.write(result.stdout)
-                    except subprocess.CalledProcessError as e:
-                        print(f"Error: Failed to dearmor signature: {e.stderr.decode()}", file=sys.stderr)
-                        sys.exit(1)
-                    except FileNotFoundError:
-                        print("Error: 'gpg' command not found.", file=sys.stderr)
-                        sys.exit(1)
-                else:
-                    try:
-                        sys.stdout.buffer.write(base64.b64decode(signature))
-                    except binascii.Error as e:
-                        print(f"Error: Malformed base64 signature: {e}", file=sys.stderr)
-                        sys.exit(1)
-                sys.stdout.buffer.flush()
+        _write_signature(signature, output_file, binary=not is_armored)
                 
     except ChelonClientError as e:
         print(f"GPG Emulation Error (signing service): {e}", file=sys.stderr)
@@ -229,10 +237,157 @@ def gpg_mode(args: List[str]):
     sys.exit(0)
 
 
+def sq_mode(args: List[str]):
+    """
+    Emulate Sequoia ``sq sign`` when called by rpmsign with %_openpgp_sign sq.
+
+    Typical expansion of %__sq_sign_cmd:
+      chelon-sign sign --signer <id> --binary --signature-file <out> -- <in>
+    """
+    output_file = None
+    input_file = "-"
+    signer = None
+    binary = False
+
+    i = 0
+    # Skip leading 'sign' subcommand if present
+    if i < len(args) and args[i] == "sign":
+        i += 1
+
+    while i < len(args):
+        arg = args[i]
+        if arg == "--signature-file":
+            if i + 1 < len(args):
+                output_file = args[i + 1]
+                i += 2
+            else:
+                print("Error: --signature-file requires an argument", file=sys.stderr)
+                sys.exit(1)
+        elif arg in ("-o", "--output"):
+            if i + 1 < len(args):
+                output_file = args[i + 1]
+                i += 2
+            else:
+                print(f"Error: {arg} requires an argument", file=sys.stderr)
+                sys.exit(1)
+        elif arg == "--signer":
+            if i + 1 < len(args):
+                signer = args[i + 1]
+                i += 2
+            else:
+                print("Error: --signer requires an argument", file=sys.stderr)
+                sys.exit(1)
+        elif arg == "--binary":
+            binary = True
+            i += 1
+        elif arg == "--":
+            if i + 1 < len(args):
+                input_file = args[i + 1]
+            break
+        elif arg in ("-h", "--help"):
+            print("chelon-sign sq emulation: sign [--signer ID] [--binary] --signature-file OUT -- IN")
+            sys.exit(0)
+        else:
+            i += 1
+
+    if signer and not os.environ.get("CHELON_KEY") and not os.environ.get("CHELON_KEY_TYPE"):
+        os.environ["CHELON_KEY"] = signer
+
+    data = _read_payload(input_file)
+    key_type = os.environ.get("CHELON_KEY") or os.environ.get("CHELON_KEY_TYPE")
+
+    try:
+        client = get_client()
+        response = client.sign_data(data, key_type=key_type, operation="rpm")
+        signature = response["signature"]
+        _write_signature(signature, output_file, binary=binary)
+    except ChelonClientError as e:
+        print(f"Sequoia Emulation Error (signing service): {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Sequoia Emulation Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.exit(0)
+
+
+def rpmsign_supports_rpmv6() -> bool:
+    """Return True if local rpmsign understands --rpmv6."""
+    try:
+        result = subprocess.run(
+            ["rpmsign", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        help_text = (result.stdout or "") + (result.stderr or "")
+        return "--rpmv6" in help_text
+    except FileNotFoundError:
+        return False
+
+
+def lookup_key_backend(key_name: Optional[str]) -> Optional[str]:
+    """
+    Ask Chelon which backend a key alias uses.
+
+    Returns None if lookup is skipped, unavailable, or the key is unknown.
+    Set CHELON_SKIP_BACKEND_CHECK=1 to skip (offline / constrained clients).
+    """
+    if not key_name:
+        return None
+    skip = os.environ.get("CHELON_SKIP_BACKEND_CHECK", "").lower()
+    if skip in ("1", "true", "yes"):
+        return None
+    try:
+        client = get_client()
+        return client.get_key_backend(key_name)
+    except Exception as e:
+        print(
+            f"Warning: could not resolve backend for key '{key_name}' ({e}); "
+            "continuing without backend check",
+            file=sys.stderr,
+        )
+        return None
+
+
+def validate_key_backend_for_mode(
+    key_name: Optional[str],
+    expected_backend: str,
+    mode: str,
+) -> bool:
+    """
+    Fail closed when the server reports a mismatched backend for an embed mode.
+
+    Args:
+        key_name: Chelon key alias.
+        expected_backend: 'gpg' or 'sequoia'.
+        mode: Human-readable mode name for errors.
+
+    Returns:
+        True if OK to proceed, False if the caller should abort.
+    """
+    backend = lookup_key_backend(key_name)
+    if backend is None:
+        return True
+    if backend != expected_backend:
+        print(
+            f"Error: key '{key_name}' uses backend '{backend}', but {mode} "
+            f"requires '{expected_backend}'. "
+            "Use --resign with a gpg-backed key and --addsign-v6 / --dual-sign "
+            "--v6-key with a sequoia-backed key.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def sign_rpm_integrated(rpm_path: str, key_type: Optional[str] = None, verbose: bool = False):
     """
-    Embed signature into RPM using rpmsign and self as wrapper.
+    Embed classical RPMv4 signature into RPM using rpmsign and self as GPG wrapper.
     """
+    if not validate_key_backend_for_mode(key_type, "gpg", "--resign"):
+        return False
+
     rpm_file = Path(rpm_path).absolute()
     script_path = Path(__file__).absolute()
     
@@ -247,7 +402,8 @@ def sign_rpm_integrated(rpm_path: str, key_type: Optional[str] = None, verbose: 
         
     # Prepare environment for the wrapper call
     new_env = os.environ.copy()
-    new_env['CHELON_KEY_TYPE'] = key_type
+    if key_type:
+        new_env['CHELON_KEY_TYPE'] = key_type
     
     cmd = [
         'rpmsign',
@@ -271,6 +427,81 @@ def sign_rpm_integrated(rpm_path: str, key_type: Optional[str] = None, verbose: 
     except Exception as e:
         print(f"Unexpected error during integrated signing: {e}", file=sys.stderr)
         return False
+
+
+def sign_rpm_addsign_v6(rpm_path: str, v6_key: str, verbose: bool = False) -> bool:
+    """
+    Append an RPMv6 signature with --addsign --rpmv6 (typically a Sequoia-backed key).
+
+    Never uses --resign (that would wipe prior classical signatures).
+    """
+    if not validate_key_backend_for_mode(v6_key, "sequoia", "--addsign-v6"):
+        return False
+
+    if not rpmsign_supports_rpmv6():
+        print(
+            "Error: local rpmsign does not support --rpmv6. "
+            "Dual-sign / --addsign-v6 requires RPM 6 (Fedora 43+ or EL10.1+).",
+            file=sys.stderr,
+        )
+        return False
+
+    rpm_file = Path(rpm_path).absolute()
+    script_path = Path(__file__).absolute()
+
+    if verbose:
+        print(f"RPMv6 addsign (--rpmv6): {rpm_file}")
+        print(f"Using V6 key: {v6_key}")
+
+    new_env = os.environ.copy()
+    new_env["CHELON_KEY_TYPE"] = v6_key
+    new_env["CHELON_KEY"] = v6_key
+
+    cmd = [
+        "rpmsign",
+        "--define", "_openpgp_sign sq",
+        "--define", f"__sq {shlex.quote(str(script_path))}",
+        "--define", f"_openpgp_sign_id {v6_key}",
+        "--addsign",
+        "--rpmv6",
+        str(rpm_file),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=not verbose, text=True, env=new_env)
+        if verbose:
+            print("✓ RPMv6 signature appended successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.strip() if e.stderr else str(e)
+        if not error_msg and not verbose:
+            error_msg = "rpmsign --addsign --rpmv6 failed (run with --verbose)"
+        print(f"Error during V6 addsign: {error_msg}", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"Unexpected error during V6 addsign: {e}", file=sys.stderr)
+        return False
+
+
+# Backward-compatible alias (Chelon 2.0 name)
+sign_rpm_addsign_pqc = sign_rpm_addsign_v6
+
+
+def sign_rpm_dual(
+    rpm_path: str,
+    classical_key: Optional[str],
+    v6_key: str,
+    verbose: bool = False,
+) -> bool:
+    """Classical resign first, then RPMv6 --addsign --rpmv6."""
+    # Validate both halves up front so a mismatched V6 key fails before classical resign.
+    if not validate_key_backend_for_mode(classical_key, "gpg", "--dual-sign (classical half)"):
+        return False
+    if not validate_key_backend_for_mode(v6_key, "sequoia", "--dual-sign (V6 half)"):
+        return False
+    if not sign_rpm_integrated(rpm_path, key_type=classical_key, verbose=verbose):
+        return False
+    return sign_rpm_addsign_v6(rpm_path, v6_key=v6_key, verbose=verbose)
 
 
 def sign_file_detached(file_path: str, output_path: Optional[str] = None,
@@ -316,16 +547,31 @@ def sign_file_detached(file_path: str, output_path: Optional[str] = None,
         sys.exit(1)
 
 
+def _looks_like_sq_invocation(argv: List[str]) -> bool:
+    """Detect rpmsign invoking us as Sequoia ``sq``."""
+    if len(argv) < 2:
+        return False
+    if argv[1] == "sign":
+        return True
+    return "--signature-file" in argv
+
+
+def _looks_like_gpg_invocation(argv: List[str]) -> bool:
+    """Detect rpmsign invoking us as GnuPG."""
+    if len(argv) < 2:
+        return False
+    gpg_flags = {'-sbo', '--detach-sign', '--armor', '--no-secmem-warning'}
+    if any(arg in gpg_flags for arg in argv):
+        return True
+    return argv[1] == '--version' and len(argv) == 2
+
+
 def main():
-    # Detect if we are being called as a GPG wrapper
-    if len(sys.argv) > 1:
-        # Check if it looks specifically like a GPG call from rpmsign
-        gpg_flags = {'-sbo', '--detach-sign', '--armor', '--no-secmem-warning'}
-        if any(arg in gpg_flags for arg in sys.argv):
-            gpg_mode(sys.argv[1:])
-        elif sys.argv[1] == '--version' and len(sys.argv) == 2:
-            # Handle standalone --version for discovery tools
-            gpg_mode(sys.argv[1:])
+    # Detect if we are being called as a GPG / Sequoia wrapper by rpmsign
+    if _looks_like_sq_invocation(sys.argv):
+        sq_mode(sys.argv[1:])
+    if _looks_like_gpg_invocation(sys.argv):
+        gpg_mode(sys.argv[1:])
 
     parser = argparse.ArgumentParser(
         description='Chelon Sign - Unified Signing Tool',
@@ -335,10 +581,30 @@ def main():
     parser.add_argument('file', help='Path to file (RPM or repomd.xml)')
     parser.add_argument('-t', '--type', choices=['rpm', 'repodata'], 
                        help='Signing type (default: guess from extension or "rpm")')
-    parser.add_argument('--resign', action='store_true', help='Embed signature into RPM header (requires rpmsign, implies --type rpm)')
+    parser.add_argument('--resign', action='store_true',
+                       help='Embed classical RPMv4 signature into RPM header (requires rpmsign)')
+    parser.add_argument(
+        '--dual-sign',
+        action='store_true',
+        help='Classical resign then append RPMv6 signature (requires rpm-sign with --rpmv6)',
+    )
+    parser.add_argument(
+        '--addsign-v6',
+        '--addsign-pqc',  # deprecated alias (Chelon 2.0)
+        dest='addsign_v6',
+        action='store_true',
+        help='Append RPMv6 signature only (RPM must already be classically signed)',
+    )
     parser.add_argument('-o', '--output', help='Output signature file (default: <file>.asc, only for detached)')
     parser.add_argument('-k', '--key', '--key-name', dest='key_name', metavar='KEY',
-                       help='GPG key name')
+                       help='Classical (typically GnuPG) key name for V4 / detached signing')
+    parser.add_argument(
+        '--v6-key', '--v6-key-name',
+        '--pqc-key', '--pqc-key-name',  # deprecated aliases (Chelon 2.0)
+        dest='v6_key_name',
+        metavar='KEY',
+        help='V6 / Sequoia-backed key name (required with --dual-sign / --addsign-v6)',
+    )
     parser.add_argument('--insecure', action='store_true', help='Disable SSL certificate verification')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
     
@@ -346,11 +612,21 @@ def main():
     
     if args.insecure:
         os.environ['CHELON_VERIFY_SSL'] = 'false'
+
+    if args.dual_sign and args.addsign_v6:
+        print("Error: use only one of --dual-sign or --addsign-v6", file=sys.stderr)
+        return 1
+    if args.dual_sign and args.resign:
+        print("Error: --dual-sign already performs classical resign; omit --resign", file=sys.stderr)
+        return 1
+    if (args.dual_sign or args.addsign_v6) and not args.v6_key_name:
+        print("Error: --v6-key / --v6-key-name is required for RPMv6 signing", file=sys.stderr)
+        return 1
         
     # Determine operation type
     op_type = args.type
     if not op_type:
-        if args.resign:
+        if args.resign or args.dual_sign or args.addsign_v6:
             op_type = 'rpm'
         elif args.file.endswith('.xml'):
             op_type = 'repodata'
@@ -362,6 +638,29 @@ def main():
         key_name = args.key_name
         if not key_name:
             key_name = os.environ.get('CHELON_KEY') or os.environ.get('CHELON_KEY_TYPE')
+
+        if args.dual_sign:
+            if op_type != 'rpm':
+                print("Error: --dual-sign is only supported for RPM files", file=sys.stderr)
+                return 1
+            success = sign_rpm_dual(
+                args.file,
+                classical_key=key_name,
+                v6_key=args.v6_key_name,
+                verbose=args.verbose,
+            )
+            return 0 if success else 1
+
+        if args.addsign_v6:
+            if op_type != 'rpm':
+                print("Error: --addsign-v6 is only supported for RPM files", file=sys.stderr)
+                return 1
+            success = sign_rpm_addsign_v6(
+                args.file,
+                v6_key=args.v6_key_name,
+                verbose=args.verbose,
+            )
+            return 0 if success else 1
 
         if args.resign:
             if op_type != 'rpm':

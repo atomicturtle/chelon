@@ -85,11 +85,33 @@ def _max_payload_bytes_from_config() -> int:
         )
         return DEFAULT_MAX_PAYLOAD_BYTES
 
-# Determine data directory
+# Determine data directory and crypto homes
 data_dir = config.get('DATA_DIR', '/var/lib/chelon')
 keys_file = os.path.join(data_dir, 'keys.json')
 
-signing_engine = SigningEngine(keys_file=keys_file)
+# Prefer config, then environment (systemd / operator overrides)
+gnupg_home = (
+    config.get('GNUPGHOME')
+    or os.environ.get('GNUPGHOME')
+    or os.path.join(data_dir, '.gnupg')
+)
+os.environ['GNUPGHOME'] = gnupg_home
+
+sequoia_home = (
+    config.get('CHELON_SEQUOIA_HOME')
+    or config.get('SEQUOIA_HOME')
+    or os.environ.get('CHELON_SEQUOIA_HOME')
+    or os.environ.get('SEQUOIA_HOME')
+    or os.path.join(data_dir, '.sequoia')
+)
+os.environ['SEQUOIA_HOME'] = sequoia_home
+os.environ['CHELON_SEQUOIA_HOME'] = sequoia_home
+
+signing_engine = SigningEngine(
+    gnupg_home=gnupg_home,
+    keys_file=keys_file,
+    sequoia_home=sequoia_home,
+)
 token_auth = TokenAuth(config_file=CONFIG_FILE)
 audit_logger = AuditLogger()
 
@@ -251,12 +273,35 @@ def _handle_signing(operation):
     try:
         resolved_key_id = signing_engine.get_key_id(key_type)
         resolved_key_name = signing_engine.get_key_name(key_type)
+        key_backend = signing_engine.get_backend(key_type)
     except ValueError as e:
         logger.warning(f"[{request_id}] Invalid key_type or ID: {key_type} - {e}")
         return jsonify({
             'error': str(e),
             'request_id': request_id
         }), 400
+
+    # Repodata stays classical detached GPG; Sequoia-backed keys are RPM-only.
+    if operation == 'sign_repodata' and key_backend == 'sequoia':
+        latency = time.time() - start_time
+        err_msg = (
+            f"Key '{resolved_key_name}' uses the sequoia backend and cannot sign "
+            "repodata. Use a classical GPG key for repository metadata."
+        )
+        logger.warning(f"[{request_id}] {err_msg}")
+        audit_logger.log_signing(
+            token_id=token_info['token_id'],
+            operation=operation,
+            key_used=resolved_key_id,
+            data_hash=None,
+            success=False,
+            client_ip=request.remote_addr,
+            request_id=request_id,
+            latency=latency,
+            error=err_msg,
+            payload_size=payload_size
+        )
+        return jsonify({'error': err_msg, 'request_id': request_id}), 400
     
     sign_target = None
     data_id = None
@@ -331,7 +376,7 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'version': '1.0.0',
+        'version': '2.0.0',
         'timestamp': datetime.now(UTC).isoformat()
     })
 

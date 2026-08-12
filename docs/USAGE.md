@@ -41,18 +41,34 @@ scp /etc/chelon/certs/chelon_ca.crt ~/.chelon/certs/
 # Sign a single RPM (detached signature)
 chelon-sign package.rpm
 
-# Embed signature into RPM header (Integrated Signing)
+# Embed classical signature into RPM header (Integrated Signing)
 # This allows 'rpm -K' to work natively
 chelon-sign --resign package.rpm
 
-# Specify key type
-chelon-sign --key-type legacy package.rpm
+# Specify classical key name
+chelon-sign --key-name legacy package.rpm
+
+# Dual-sign: classical RPMv4 + RPMv6 (durable RPM policy; needs rpm-sign --rpmv6)
+chelon-sign --dual-sign --key-name modern --v6-key pqc package.rpm
+
+# Append V6 only (RPM already classically signed)
+chelon-sign --addsign-v6 --v6-key pqc package.rpm
 
 # Sign multiple RPMs
 for rpm in *.rpm; do
-    chelon-sign "$rpm"
+    chelon-sign --resign --key-name modern "$rpm"
 done
 ```
+
+**Dual-sign notes:**
+* Keys are opaque aliases; `backend: sequoia` in `keys.json` selects Sequoia. The name `pqc` is convention only.
+* Client host needs RPM 6 / `rpmsign --rpmv6` (Fedora 43+ or EL10.1+) to *produce* V6 signatures.
+* Chelon server needs `sequoia-sq` and a Sequoia-backed key entry.
+* Order is always classical first, then `--addsign --rpmv6` (never resign for the V6 step).
+* Repository metadata stays classical GPG — do not use a Sequoia-backed key for `repomd.xml`.
+* **Roll out EL9 dual-sign first**; enable EL10 only after V6 public keys are on clients (V6 present ⇒ V4 ignored on RPM 6).
+* Deprecated aliases still work: `--pqc-key-name`, `--addsign-pqc`.
+* `chelon-sign` checks key backends via the API (`gpg` for `--resign`, `sequoia` for `--v6-key`). Set `CHELON_SKIP_BACKEND_CHECK=1` to skip.
 
 **Output:**
 ```
@@ -81,8 +97,8 @@ chelon-sign repodata/repomd.xml
 # Explicitly specify type
 chelon-sign --type repodata repodata/repomd.xml
 
-# Specify key type
-chelon-sign --key-type modern repodata/repomd.xml
+# Specify classical key (Sequoia-backed keys are rejected for repodata)
+chelon-sign --key-name modern --type repodata repodata/repomd.xml
 ```
 
 **Output:**

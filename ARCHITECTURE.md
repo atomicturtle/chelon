@@ -1,7 +1,9 @@
-# Blind Oracle: Remote Package Signing Service
+# Blind Oracle / Chelon: Remote Package Signing Service
 
 ## Overview
-The Blind Oracle is a secure, remote signing service that holds GPG private keys and signs RPM packages and repository metadata on behalf of build servers. Build servers never have access to private keys, significantly reducing the attack surface.
+Chelon (historically "Blind Oracle") is a secure, remote signing service that holds OpenPGP private keys and signs RPM packages and repository metadata on behalf of build servers. Build servers never have access to private keys, significantly reducing the attack surface.
+
+Clients send signing **payloads** (full files for detached signatures, or digest streams from `rpmsign` for integrated signing) over HTTPS and receive ASCII-armored OpenPGP signatures. Classical keys use GnuPG; V6 dual-sign keys use Sequoia (`sq`). Key names are opaque aliases; `backend` in `keys.json` selects the implementation. RPM **dual-sign** is packaging policy (prefer EL9 before EL10).
 
 ## Architecture
 
@@ -12,39 +14,38 @@ The Blind Oracle is a secure, remote signing service that holds GPG private keys
 │                      Build Server (GitLab Runner)            │
 │                                                              │
 │  ┌──────────────┐      ┌─────────────────────────────────┐ │
-│  │ gitlab-build │─────▶│ sign-package.sh                 │ │
-│  │    -4.sh     │      │  (Client Mode)                  │ │
+│  │ gitlab-build │─────▶│ chelon-sign                     │ │
+│  │     *.sh     │      │  (--resign / --dual-sign)       │ │
 │  └──────────────┘      └─────────────────────────────────┘ │
 │                                 │                            │
 │                                 │ HTTPS POST                 │
-│                                 │ {hash, dist, key_type}     │
+│                                 │ {data: base64, key_type}   │
 └─────────────────────────────────┼────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Blind Oracle Server                       │
+│                    Chelon Server                             │
 │                                                              │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  HTTP API (Flask/FastAPI)                           │   │
-│  │  - POST /sign/rpm                                   │   │
-│  │  - POST /sign/repodata                              │   │
-│  │  - GET /health                                      │   │
+│  │  HTTP API (Flask)                                   │   │
+│  │  - POST /api/v1/sign/rpm                            │   │
+│  │  - POST /api/v1/sign/repodata                       │   │
+│  │  - GET /api/v1/health                               │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                         │                                    │
 │                         ▼                                    │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Signing Engine                                     │   │
-│  │  - Key selection (Legacy/Modern)                    │   │
-│  │  - GPG signing operations                           │   │
+│  │  - Key selection (named aliases)                    │   │
+│  │  - GnuPG or Sequoia by backend                      │   │
 │  │  - Audit logging                                    │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                         │                                    │
 │                         ▼                                    │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  GPG Keyring (Offline Storage)                      │   │
-│  │  - Legacy Key (4520AFA9)                            │   │
-│  │  - Modern Key (CB2C73F04F3BE076)                    │   │
-│  │  - Passphrases in secure vault                      │   │
+│  │  Key stores                                         │   │
+│  │  - GnuPG: classical aliases (legacy / modern)       │   │
+│  │  - Sequoia: V6 aliases (often named pqc)            │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -52,10 +53,10 @@ The Blind Oracle is a secure, remote signing service that holds GPG private keys
 ## Security Model
 
 ### Threat Mitigation
-1. **Build Server Compromise**: Private keys never leave the Oracle
+1. **Build Server Compromise**: Private keys never leave Chelon
 2. **Network Interception**: HTTPS + API token authentication
 3. **Unauthorized Signing**: Token-based access control + audit logs
-4. **Key Compromise**: Master key offline, only signing subkeys on Oracle
+4. **Key Compromise**: Master key offline, only signing subkeys on Chelon
 
 ### Authentication
 - API tokens per build server
@@ -66,22 +67,20 @@ The Blind Oracle is a secure, remote signing service that holds GPG private keys
 - All signing requests logged with:
   - Timestamp
   - Requesting server (token ID)
-  - Package hash
+  - Payload hash (SHA-256 of signed bytes)
   - Key used
   - Success/failure
 
 ## API Specification
 
-### POST /sign/rpm
-Sign an RPM package.
+### POST /api/v1/sign/rpm
+Sign RPM-related payload bytes (full RPM for detached, or digest stream from `rpmsign`).
 
 **Request:**
 ```json
 {
-  "package_hash": "sha256:abc123...",
-  "distribution": "el10-x86_64",
-  "key_type": "modern",
-  "token": "secret-api-token"
+  "data": "<base64-encoded-bytes>",
+  "key_type": "modern"
 }
 ```
 
@@ -90,19 +89,22 @@ Sign an RPM package.
 {
   "signature": "-----BEGIN PGP SIGNATURE-----...",
   "key_id": "CB2C73F04F3BE076",
+  "key_fingerprint": "...",
+  "request_id": "...",
   "timestamp": "2026-01-06T11:25:00Z"
 }
 ```
 
-### POST /sign/repodata
-Sign repository metadata (repomd.xml).
+Use `key_type: "<alias>"` (e.g. `modern` or `pqc`) for digests during dual-sign. Permission remains `sign:rpm`. Sequoia vs GnuPG is selected via `backend` in `keys.json`, not a PQC API field.
+
+### POST /api/v1/sign/repodata
+Sign repository metadata (repomd.xml). **Classical GPG keys only** — Sequoia backends are rejected.
 
 **Request:**
 ```json
 {
-  "repodata_hash": "sha256:def456...",
-  "key_type": "modern",
-  "token": "secret-api-token"
+  "data": "<base64-encoded-repomd.xml>",
+  "key_type": "modern"
 }
 ```
 
@@ -111,78 +113,38 @@ Sign repository metadata (repomd.xml).
 {
   "signature": "-----BEGIN PGP SIGNATURE-----...",
   "key_id": "CB2C73F04F3BE076",
+  "request_id": "...",
   "timestamp": "2026-01-06T11:25:00Z"
 }
 ```
 
-## Implementation Phases
+## Deployment Notes
 
-### Phase 1: Local Prototype (Current)
-- ✅ `sign-package.sh` uses local GPG keys
-- ✅ Dual key selection logic
-- ✅ Deployed to GitLab runners
-
-### Phase 2: Oracle Server (Next)
-- [ ] Create Flask/FastAPI service
-- [ ] Implement signing endpoints
-- [ ] Add authentication/authorization
-- [ ] Deploy to secure server
-- [ ] Audit logging
-
-### Phase 3: Client Integration
-- [ ] Update `sign-package.sh` to detect Oracle mode
-- [ ] Implement HTTP client for signing requests
-- [ ] Fallback to local signing if Oracle unavailable
-- [ ] Token management
-
-### Phase 4: Production Hardening
-- [ ] HTTPS with mutual TLS
-- [ ] Hardware Security Module (HSM) integration
-- [ ] High availability / redundancy
-- [ ] Monitoring and alerting
-- [ ] Key rotation automation
-
-## Deployment Model
-
-### Development/Testing
-- Oracle runs on `winona7` (local development)
-- Build servers use API token for testing
-
-### Production
-- Oracle runs on dedicated, hardened server
-- Firewall rules: Only GitLab runners can access
-- Private keys stored in encrypted volume
-- Regular backups of audit logs
+- Server: Fedora 43+ or EL10.1+ when enabling Sequoia (`Requires: sequoia-sq`).
+- Client: `Requires: sequoia-sq`, `gnupg2`, and `rpm-sign` so builders get ``sq`` for dearmor/RPMv6 without manual setup.
+- Dual-sign clients: `rpm-sign` with `--rpmv6` to produce V6 signatures.
+- Roll out dual-signed RPMs on **EL9 first**; EL10 only after V6 pubkey trust (see `docs/SIGNING_STRATEGY.md`).
 
 ## File Structure
 ```
-blind-oracle/
-├── ARCHITECTURE.md          # This file
-├── SIGNING_STRATEGY.md      # GPG key strategy (existing)
+chelon/
+├── ARCHITECTURE.md
+├── README.md
+├── docs/
+│   ├── SIGNING_STRATEGY.md
+│   └── USAGE.md
 ├── server/
-│   ├── oracle-service.py    # Main Flask/FastAPI app
-│   ├── signing_engine.py    # GPG signing logic
-│   ├── auth.py              # Token authentication
-│   ├── audit.py             # Audit logging
-│   └── requirements.txt     # Python dependencies
-├── client/
-│   ├── sign-package.sh      # Updated with Oracle support
-│   └── oracle-client.py     # Python client library
-├── deployment/
-│   ├── systemd/
-│   │   └── oracle.service   # Systemd unit file
-│   ├── nginx/
-│   │   └── oracle.conf      # Nginx reverse proxy config
-│   └── docker/
-│       └── Dockerfile       # Container image
+│   ├── chelon-service.py
+│   ├── signing_engine.py
+│   ├── auth.py
+│   └── audit.py
+├── tools/
+│   ├── chelon-sign
+│   ├── chelon-admin
+│   └── chelon_client.py
+├── config/
+│   └── chelon.conf
+├── systemd/
+│   └── chelon.service
 └── tests/
-    ├── test_signing.py      # Unit tests
-    └── test_integration.py  # Integration tests
 ```
-
-## Next Steps
-1. Implement basic Flask service with `/sign/rpm` endpoint
-2. Create Python signing engine using `gpg` library
-3. Update `sign-package.sh` to support Oracle mode
-4. Test end-to-end signing workflow
-5. Add authentication and audit logging

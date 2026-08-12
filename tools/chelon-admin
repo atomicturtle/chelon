@@ -166,7 +166,13 @@ def handle_keys_command(args):
     if args.keys_command == 'list':
         list_keys(keys_file)
     elif args.keys_command == 'add':
-        add_key(keys_file, args.name, args.key_id, args.description)
+        add_key(
+            keys_file,
+            args.name,
+            args.key_id,
+            args.description,
+            backend=getattr(args, 'backend', 'gpg'),
+        )
     elif args.keys_command == 'remove':
         remove_key(keys_file, args.name)
     elif args.keys_command == 'enable':
@@ -187,21 +193,27 @@ def list_keys(keys_file):
         print("No keys configured")
         return
     
-    print(f"{'Name':<20} {'Key ID':<20} {'Status':<10} {'Default':<10} {'Description'}")
-    print("-" * 90)
+    print(f"{'Name':<16} {'Key ID':<20} {'Backend':<10} {'Status':<10} {'Default':<8} {'Description'}")
+    print("-" * 100)
     for name, info in keys.items():
         enabled = "enabled" if info.get('enabled', True) else "disabled"
         is_default = "✓" if name == default_key else ""
         description = info.get('description', '')
         key_id = info.get('key_id', '')
-        print(f"{name:<20} {key_id:<20} {enabled:<10} {is_default:<10} {description}")
+        backend = info.get('backend', 'gpg')
+        print(f"{name:<16} {key_id:<20} {backend:<10} {enabled:<10} {is_default:<8} {description}")
 
 
-def add_key(keys_file, name, key_id, description):
+def add_key(keys_file, name, key_id, description, backend='gpg'):
     """Add a new key"""
     import re
     if not re.match(r'^[a-zA-Z0-9_-]+$', name):
         print(f"Error: Invalid key name '{name}'. Use only alphanumeric, underscore, or dash.")
+        sys.exit(1)
+
+    backend = (backend or 'gpg').lower().strip()
+    if backend not in ('gpg', 'sequoia'):
+        print(f"Error: Invalid backend '{backend}'. Use 'gpg' or 'sequoia'.")
         sys.exit(1)
     
     config = load_keys_config(keys_file)
@@ -211,16 +223,19 @@ def add_key(keys_file, name, key_id, description):
     
     config.setdefault('keys', {})[name] = {
         'key_id': key_id,
+        'backend': backend,
         'description': description,
         'enabled': True
     }
     
-    # Set as default if no default exists
-    if not config.get('default_key'):
+    # Set as default if no default exists (prefer classical gpg as default)
+    if not config.get('default_key') and backend == 'gpg':
+        config['default_key'] = name
+    elif not config.get('default_key'):
         config['default_key'] = name
     
     save_keys_config(keys_file, config)
-    print(f"Added key '{name}' ({key_id})")
+    print(f"Added key '{name}' ({key_id}) backend={backend}")
 
 
 def remove_key(keys_file, name):
@@ -319,8 +334,14 @@ def main():
     # keys add
     keys_add = keys_subparsers.add_parser('add', help='Add a new key')
     keys_add.add_argument('name', help='Key name (alphanumeric, underscore, dash)')
-    keys_add.add_argument('key_id', help='GPG key ID')
+    keys_add.add_argument('key_id', help='GPG key ID or Sequoia fingerprint')
     keys_add.add_argument('--description', default='', help='Key description')
+    keys_add.add_argument(
+        '--backend',
+        choices=['gpg', 'sequoia'],
+        default='gpg',
+        help='Signing backend (default: gpg; use sequoia for RPMv6 / ML-DSA keys)',
+    )
     
     # keys remove
     keys_remove = keys_subparsers.add_parser('remove', help='Remove a key')
